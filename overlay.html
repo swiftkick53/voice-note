@@ -1,0 +1,1797 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700&display=swap">
+<style>
+/* ==========================================================================
+   Voice Notes — Soft Matter design system
+   Warm, malleable, playful. Terracotta · amber · sage · teal.
+   Living blob, oil-slick gradients, squishy interactions.
+   ========================================================================== */
+
+/* ---------- Tokens ---------- */
+:root {
+  --f-display: "Instrument Serif", Georgia, serif;
+  --f-ui: "Inter", -apple-system, system-ui, sans-serif;
+  --f-mono: ui-monospace, "SF Mono", "Cascadia Mono", monospace;
+
+  --r-sm: 10px;
+  --r: 16px;
+  --r-lg: 24px;
+  --r-pill: 999px;
+
+  /* Neutral ink — warm */
+  --ink-0: oklch(0.97 0.006 75);
+  --ink-1: oklch(0.87 0.008 70);
+  --ink-2: oklch(0.66 0.012 65);
+  --ink-3: oklch(0.50 0.012 60);
+  --ink-4: oklch(0.34 0.010 55);
+
+  /* Signature palette */
+  --c-signature: oklch(0.64 0.15 45);
+  --c-signature-hi: oklch(0.78 0.14 58);
+  --c-signature-lo: oklch(0.48 0.16 38);
+  --c-coral: oklch(0.66 0.21 28);
+  --c-coral-hi: oklch(0.78 0.18 38);
+  --c-coral-lo: oklch(0.52 0.22 22);
+  --c-sage: oklch(0.76 0.14 145);
+  --c-sage-hi: oklch(0.84 0.13 140);
+  --c-ocean: oklch(0.66 0.12 200);
+  --c-peach: oklch(0.86 0.10 55);
+
+  /* Surfaces — warm espresso */
+  --bg: oklch(0.14 0.012 50);
+  --bg-2: oklch(0.18 0.016 50);
+  --bg-3: oklch(0.23 0.020 48);
+  --surface: oklch(0.20 0.018 50);
+  --hairline: oklch(1 0 0 / 0.08);
+  --hairline-2: oklch(1 0 0 / 0.04);
+
+  /* Shadows */
+  --sh-soft: 0 1px 2px oklch(0 0 0 / 0.4), 0 10px 30px -10px oklch(0 0 0 / 0.5);
+  --sh-float: 0 2px 4px oklch(0 0 0 / 0.4), 0 20px 60px -20px oklch(0 0 0 / 0.7);
+}
+
+/* ---------- Animations ---------- */
+@keyframes breathe { 0%,100% { transform: scale(1); } 50% { transform: scale(1.04); } }
+@keyframes breathe-strong { 0%,100% { transform: scale(1); } 50% { transform: scale(1.08); } }
+@keyframes ping-ring {
+  0% { transform: scale(1); opacity: 0.6; }
+  100% { transform: scale(1.8); opacity: 0; }
+}
+@keyframes drift-bg {
+  0%   { background-position: 0% 50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+@keyframes shimmer-move { to { background-position: -200% 0; } }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ---------- Reset ---------- */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body {
+  font-family: var(--f-ui);
+  -webkit-font-smoothing: antialiased;
+  font-size: 13px;
+  line-height: 1.47;
+  letter-spacing: -0.01em;
+  color: var(--ink-0);
+  background: var(--bg);
+  user-select: none;
+  overflow: hidden;
+}
+button {
+  font-family: inherit; background: transparent;
+  border: none; color: inherit; cursor: pointer;
+  letter-spacing: inherit;
+}
+input, textarea {
+  font-family: inherit; letter-spacing: inherit; color: inherit;
+}
+input:focus, textarea:focus, button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px oklch(0.7 0.15 45 / 0.5);
+}
+.hidden { display: none !important; }
+
+.font-display { font-family: var(--f-display); letter-spacing: -0.02em; }
+.font-mono { font-family: var(--f-mono); font-feature-settings: "tnum" 1, "zero" 1; }
+
+.shimmer {
+  background: linear-gradient(90deg,
+    var(--ink-2) 0%, var(--ink-2) 40%,
+    var(--c-signature-hi) 50%, var(--ink-2) 60%, var(--ink-2) 100%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: shimmer-move 2.4s linear infinite;
+}
+
+.squish:active { transform: scale(0.92); transition: transform 0.05s; }
+
+/* ========== APP SHELL ========== */
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  border-radius: 16px;
+  overflow: hidden;
+  position: relative;
+}
+
+.page {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Each state fills its page */
+.state {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: fadeIn 0.35s ease;
+}
+
+/* ========== HEADER (soft pill) ========== */
+.soft-header {
+  padding: 18px 22px 6px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  z-index: 2;
+  position: relative;
+}
+.header-dot {
+  width: 28px; height: 28px;
+  border-radius: 50%;
+  box-shadow: 0 4px 12px oklch(0.55 0.16 45 / 0.4);
+  flex-shrink: 0;
+}
+.header-info { flex: 1; }
+.header-title {
+  font-size: 14px; font-weight: 600;
+}
+.header-sub {
+  font-size: 11px; color: var(--ink-2); margin-top: 1px;
+}
+
+.header-action {
+  padding: 6px 12px; font-size: 11px; font-weight: 500;
+  background: oklch(1 0 0 / 0.08); color: var(--ink-0);
+  border: 1px solid oklch(1 0 0 / 0.12);
+  border-radius: var(--r-pill); cursor: pointer;
+}
+.header-action:hover { background: oklch(1 0 0 / 0.14); }
+
+.win-controls {
+  display: flex; gap: 4px;
+}
+.win-btn {
+  width: 28px; height: 28px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--ink-2); font-size: 14px;
+  transition: background 120ms ease, color 120ms ease;
+}
+.win-btn:hover { background: oklch(1 0 0 / 0.12); color: var(--ink-0); }
+.win-btn.close:hover { background: oklch(0.72 0.18 25); color: white; }
+
+/* ========== ATMOSPHERE BACKGROUNDS ========== */
+.atmo-idle {
+  background:
+    radial-gradient(ellipse 120% 80% at 50% -20%, oklch(0.30 0.18 40) 0%, transparent 55%),
+    radial-gradient(ellipse 80% 60% at 15% 110%, oklch(0.26 0.14 40) 0%, transparent 55%),
+    radial-gradient(ellipse 80% 60% at 85% 70%, oklch(0.24 0.10 200) 0%, transparent 60%),
+    oklch(0.15 0.015 50);
+}
+.atmo-recording {
+  background:
+    radial-gradient(ellipse 120% 80% at 50% 20%, oklch(0.38 0.22 28) 0%, transparent 55%),
+    radial-gradient(ellipse 80% 60% at 85% 90%, oklch(0.30 0.16 40) 0%, transparent 55%),
+    oklch(0.15 0.015 50);
+}
+.atmo-processing {
+  background:
+    radial-gradient(ellipse 120% 80% at 50% 20%, oklch(0.36 0.14 145) 0%, transparent 55%),
+    radial-gradient(ellipse 80% 60% at 15% 90%, oklch(0.26 0.10 200) 0%, transparent 55%),
+    oklch(0.15 0.015 50);
+}
+.atmo-post {
+  background:
+    radial-gradient(ellipse 120% 80% at 50% -10%, oklch(0.28 0.14 55) 0%, transparent 55%),
+    radial-gradient(ellipse 80% 60% at 85% 100%, oklch(0.24 0.12 30) 0%, transparent 55%),
+    oklch(0.15 0.015 50);
+}
+.atmo-library {
+  background:
+    radial-gradient(ellipse 100% 60% at 50% 0%, oklch(0.22 0.10 55) 0%, transparent 60%),
+    oklch(0.15 0.015 50);
+}
+.atmo-settings {
+  background:
+    radial-gradient(ellipse 100% 60% at 50% 0%, oklch(0.22 0.08 200) 0%, transparent 60%),
+    oklch(0.15 0.015 50);
+}
+
+/* ========== BLOB ========== */
+.blob-wrap {
+  position: relative;
+  cursor: pointer;
+  transition: filter 0.6s ease;
+}
+.blob-wrap svg { overflow: visible; }
+.ping-ring {
+  position: absolute; inset: -12px;
+  border-radius: 50%;
+  border: 1.5px solid oklch(0.72 0.22 28);
+  animation: ping-ring 1.9s ease-out infinite;
+  opacity: 0.85;
+  pointer-events: none;
+}
+
+/* ========== WAVEFORM BARS ========== */
+.waveform-bars {
+  width: 82%; height: 60px;
+  display: flex; align-items: center; justify-content: center;
+  gap: 3px;
+}
+.waveform-bars .bar {
+  width: 5px;
+  border-radius: var(--r-pill);
+  transition: height 0.12s ease;
+  min-height: 3px;
+}
+
+/* ========== SQUISHY PILL BUTTONS ========== */
+.pill-btn {
+  padding: 10px 18px;
+  font-size: 13px; font-weight: 600;
+  letter-spacing: -0.005em;
+  border: 1px solid oklch(1 0 0 / 0.12);
+  border-radius: var(--r-pill);
+  background: oklch(1 0 0 / 0.08);
+  color: var(--ink-0);
+  transition: transform 0.15s cubic-bezier(.3,1.4,.3,1), box-shadow 0.2s;
+}
+.pill-btn:active { transform: scale(0.92); }
+.pill-btn:hover { background: oklch(1 0 0 / 0.14); }
+
+.pill-btn.primary {
+  background: linear-gradient(135deg, oklch(0.78 0.15 70), oklch(0.58 0.18 40));
+  color: oklch(1 0 0 / 0.98);
+  border: none;
+  box-shadow: 0 12px 28px oklch(0.58 0.18 45 / 0.4);
+}
+.pill-btn.primary:hover {
+  box-shadow: 0 16px 36px oklch(0.58 0.18 45 / 0.5);
+}
+.pill-btn.primary.coral {
+  background: linear-gradient(135deg, oklch(0.72 0.22 40), oklch(0.55 0.24 22));
+  box-shadow: 0 12px 28px oklch(0.6 0.24 30 / 0.4);
+}
+
+.pill-btn.danger {
+  background: oklch(0.55 0.22 22);
+  color: white;
+  border: none;
+}
+
+/* ========== KBD ========== */
+kbd {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 18px; height: 18px; padding: 0 5px;
+  font-size: 10px; font-weight: 500;
+  font-family: var(--f-mono);
+  border-radius: 5px;
+  background: oklch(1 0 0 / 0.08);
+  color: oklch(0.85 0.01 280);
+  border: 1px solid oklch(1 0 0 / 0.12);
+}
+
+/* ========== ENGINE PICKER ========== */
+.engine-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+.engine-tile {
+  padding: 10px;
+  border: 1px solid oklch(1 0 0 / 0.08);
+  border-radius: 14px;
+  background: oklch(1 0 0 / 0.05);
+  color: oklch(0.90 0.01 280);
+  text-align: left;
+  cursor: pointer;
+  display: flex; flex-direction: column; gap: 4px;
+  transition: all 0.2s cubic-bezier(.3,1.4,.3,1);
+}
+.engine-tile:active { transform: scale(0.92); }
+.engine-tile:hover { background: oklch(1 0 0 / 0.09); }
+.engine-tile .glyph {
+  font-size: 18px; line-height: 1;
+}
+.engine-tile .ename {
+  font-size: 11px; font-weight: 600; line-height: 1.2;
+}
+.engine-tile.active {
+  border: none;
+  color: oklch(0.98 0.01 280);
+}
+
+/* ========== TRANSCRIPT WELL ========== */
+.transcript-well {
+  padding: 12px 14px;
+  background: oklch(1 0 0 / 0.05);
+  border-radius: 14px;
+  border: 1px solid oklch(1 0 0 / 0.08);
+  font-size: 12px; line-height: 1.55;
+  color: oklch(0.85 0.01 280);
+  overflow: auto;
+  max-height: 110px;
+  resize: none;
+  width: 100%;
+  font-family: var(--f-ui);
+}
+.transcript-well:focus {
+  border-color: oklch(1 0 0 / 0.2);
+}
+
+/* ========== TITLE INPUT ========== */
+.title-input {
+  background: transparent; border: none; outline: none;
+  font-size: 22px; font-weight: 600; letter-spacing: -0.02em;
+  color: oklch(0.98 0.01 280);
+  font-family: var(--f-ui);
+  padding: 4px 0; width: 100%;
+}
+.title-input::placeholder { color: oklch(0.50 0.01 280); }
+
+.title-chip {
+  display: inline-flex;
+  align-items: center; gap: 6px;
+  padding: 4px 10px;
+  background: oklch(1 0 0 / 0.08);
+  border: 1px solid oklch(1 0 0 / 0.12);
+  border-radius: var(--r-pill);
+  font-size: 11px; color: var(--ink-2);
+  cursor: pointer; margin-top: 2px;
+}
+.title-chip:hover { background: oklch(1 0 0 / 0.14); }
+.title-chip.loading { opacity: 0.5; cursor: default; }
+
+/* ========== LIBRARY BENTO ========== */
+.library-scroll {
+  flex: 1; overflow: auto; padding: 6px 18px 10px;
+}
+.library-search {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 14px;
+  background: oklch(1 0 0 / 0.05);
+  border-radius: 14px;
+  border: 1px solid oklch(1 0 0 / 0.08);
+  margin-bottom: 12px;
+  color: oklch(0.72 0.01 280); font-size: 13px;
+}
+.library-search span { flex: 1; }
+
+.day-group { margin-bottom: 14px; }
+.day-header {
+  display: flex; justify-content: space-between; align-items: baseline;
+  margin: 4px 2px 8px;
+}
+.day-header .day-label { font-size: 12px; font-weight: 700; }
+.day-header .day-meta {
+  font-size: 10px; color: oklch(0.65 0.01 280);
+  font-family: var(--f-mono);
+}
+.bento-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 8px;
+}
+.bento-card {
+  padding: 10px 12px;
+  background: oklch(1 0 0 / 0.05);
+  border: 1px solid oklch(1 0 0 / 0.08);
+  border-radius: 14px;
+  cursor: pointer;
+  display: flex; flex-direction: column; gap: 4px;
+  position: relative; overflow: hidden;
+  transition: transform 0.2s, background 0.2s;
+  min-height: 62px;
+}
+.bento-card:hover { background: oklch(1 0 0 / 0.1); }
+.bento-card:active { transform: scale(0.97); }
+.bento-card.big { grid-column: span 6; padding: 13px 14px; border-radius: 18px; min-height: 86px; }
+.bento-card.half { grid-column: span 3; }
+.bento-card .stripe {
+  position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+}
+.bento-card .card-title {
+  font-size: 12px; font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  padding-left: 4px;
+}
+.bento-card.big .card-title { font-size: 14px; }
+.bento-card .card-time {
+  font-size: 9px; color: oklch(0.65 0.01 280); margin-left: 6px;
+  font-family: var(--f-mono); flex-shrink: 0;
+}
+.bento-card .card-snippet {
+  font-size: 11px; color: oklch(0.80 0.01 280); line-height: 1.45;
+  padding-left: 4px;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.bento-card .card-meta {
+  display: flex; gap: 6px; align-items: center;
+  margin-top: auto; font-size: 10px; padding-left: 4px;
+}
+.bento-card .card-engine { font-weight: 600; }
+.bento-card .card-dur { color: oklch(0.55 0.01 280); font-family: var(--f-mono); }
+
+/* ========== SETTINGS ========== */
+.settings-card {
+  padding: 14px;
+  background: var(--surface);
+  border-radius: 18px;
+  box-shadow: var(--sh-soft);
+  margin-bottom: 14px;
+}
+.settings-row {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 10px 6px;
+  font-size: 13px;
+}
+.settings-row + .settings-row {
+  border-top: 1px solid var(--hairline-2);
+}
+.settings-row .key { color: var(--ink-1); }
+.settings-row .val {
+  padding: 3px 10px;
+  border-radius: var(--r-pill);
+  font-size: 12px; font-weight: 500;
+}
+
+.settings-input {
+  background: oklch(1 0 0 / 0.08);
+  border: 1px solid oklch(1 0 0 / 0.12);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--ink-0);
+  width: 120px;
+  text-align: right;
+}
+
+/* ========== PROGRESS BAR ========== */
+.progress-track {
+  width: 100%; height: 6px;
+  background: oklch(1 0 0 / 0.08);
+  border-radius: var(--r-pill);
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, oklch(0.78 0.16 65), oklch(0.75 0.22 28), oklch(0.82 0.14 145));
+  background-size: 200% 100%;
+  animation: drift-bg 2s linear infinite;
+  border-radius: var(--r-pill);
+  transition: width 0.2s;
+}
+
+/* ========== MODAL ========== */
+.modal-backdrop {
+  position: fixed; inset: 0; z-index: 100;
+  background: oklch(0.14 0.012 50 / 0.82);
+  backdrop-filter: blur(8px);
+  display: flex; align-items: center; justify-content: center;
+}
+.modal {
+  background: var(--bg-2);
+  border: 1px solid oklch(1 0 0 / 0.12);
+  border-radius: 20px;
+  padding: 24px;
+  max-width: 320px; width: 90%;
+  box-shadow: var(--sh-float);
+}
+.modal-title {
+  font-size: 17px; font-weight: 700; margin-bottom: 8px;
+}
+.modal-body {
+  font-size: 13px; color: var(--ink-2); line-height: 1.5;
+  margin-bottom: 20px;
+}
+.modal-actions {
+  display: flex; gap: 10px; justify-content: flex-end;
+}
+
+/* ========== TOAST ========== */
+.save-toast {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: oklch(0.14 0.012 50 / 0.82);
+  backdrop-filter: blur(8px);
+  z-index: 10;
+  animation: fadeIn 0.3s ease;
+}
+.save-toast-inner {
+  padding: 24px 36px; border-radius: 20px;
+  background: radial-gradient(circle at 30% 30%, oklch(0.82 0.17 130), oklch(0.50 0.22 160));
+  color: oklch(0.15 0.05 150);
+  font-weight: 700; font-size: 18px;
+  box-shadow: 0 20px 60px oklch(0.6 0.22 150 / 0.5);
+  display: flex; align-items: center; gap: 10px;
+}
+
+/* ========== EMPTY STATE ========== */
+.empty-state {
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 12px; padding: 40px;
+  color: var(--ink-3); font-size: 13px;
+}
+
+/* ========== CHECKBOX ========== */
+.check-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 0;
+}
+.check-row input[type="checkbox"] {
+  width: 16px; height: 16px;
+  accent-color: oklch(0.64 0.15 45);
+}
+.check-row label { font-size: 12px; color: var(--ink-1); cursor: pointer; }
+
+/* ========== CUSTOM PROMPT ========== */
+.custom-prompt-area {
+  width: 100%;
+  min-height: 60px;
+  padding: 10px 12px;
+  background: oklch(1 0 0 / 0.05);
+  border: 1px solid oklch(1 0 0 / 0.08);
+  border-radius: 12px;
+  font-size: 12px; line-height: 1.5;
+  color: var(--ink-0);
+  resize: vertical;
+  font-family: var(--f-ui);
+}
+
+/* ========== MODE TOGGLE (note/dictation) ========== */
+.mode-toggle {
+  display: flex; gap: 0; border-radius: var(--r-pill);
+  background: oklch(1 0 0 / 0.06);
+  border: 1px solid oklch(1 0 0 / 0.10);
+  overflow: hidden;
+}
+.mode-btn {
+  padding: 6px 14px; font-size: 11px; font-weight: 600;
+  color: var(--ink-2);
+  transition: all 0.18s ease;
+}
+.mode-btn.active {
+  background: oklch(1 0 0 / 0.14);
+  color: var(--ink-0);
+}
+</style>
+</head>
+<body>
+<div class="app" id="app">
+
+  <!-- ===== PAGE: CAPTURE (Audio) ===== -->
+  <div class="page" id="page-audio">
+
+    <!-- STATE: IDLE -->
+    <div class="state atmo-idle" id="state-idle">
+      <div class="soft-header">
+        <div class="header-dot" id="idle-dot" style="background: radial-gradient(circle at 30% 30%, oklch(0.82 0.14 70), oklch(0.55 0.18 40));"></div>
+        <div class="header-info">
+          <div class="header-title">Voice Notes</div>
+          <div class="header-sub">Ready when you are</div>
+        </div>
+        <div class="mode-toggle">
+          <button class="mode-btn active" data-mode="note" onclick="setMode('note')">Note</button>
+          <button class="mode-btn" data-mode="dictation" onclick="setMode('dictation')">Dictation</button>
+        </div>
+        <div class="win-controls">
+          <button class="win-btn" onclick="send('minimize')" title="Hide">−</button>
+          <button class="win-btn close" onclick="send('close')" title="Close">×</button>
+        </div>
+      </div>
+
+      <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:28px;">
+        <div class="font-display" style="font-size:32px; font-weight:400; letter-spacing:-0.03em; color:oklch(0.92 0.01 280); text-align:center; font-style:italic;">
+          what's on your mind?
+        </div>
+
+        <div id="blob-idle" class="blob-wrap record-btn" onclick="send('record')" style="width:200px; height:200px;">
+          <svg id="blob-svg-idle" viewBox="0 0 170 170" width="200" height="200">
+            <defs>
+              <radialGradient id="blob-grad-idle" cx="0.5" cy="0.5" r="0.85">
+                <stop offset="0" stop-color="oklch(0.94 0.09 90)"/>
+                <stop offset="0.35" stop-color="oklch(0.78 0.14 73)"/>
+                <stop offset="0.75" stop-color="oklch(0.62 0.15 55)"/>
+                <stop offset="1" stop-color="oklch(0.44 0.14 45)"/>
+              </radialGradient>
+              <radialGradient id="blob-sheen-idle" cx="0.5" cy="0.5" r="0.55">
+                <stop offset="0" stop-color="oklch(0.80 0.08 -5)" stop-opacity="0.45"/>
+                <stop offset="0.7" stop-color="oklch(0.80 0.08 -5)" stop-opacity="0"/>
+              </radialGradient>
+            </defs>
+            <path id="blob-path-idle" d="" fill="url(#blob-grad-idle)"/>
+            <path id="blob-path-idle-sheen" d="" fill="url(#blob-sheen-idle)" style="mix-blend-mode:screen"/>
+            <ellipse id="blob-specular-idle" cx="85" cy="55" rx="26" ry="14" fill="oklch(1 0 0 / 0.45)" style="filter:blur(8px)"/>
+          </svg>
+        </div>
+
+        <div style="display:flex; align-items:center; gap:8px; font-size:12px; color:oklch(0.72 0.01 280);">
+          <kbd id="hotkey-display">F1</kbd>
+          <span>to start · tap the blob</span>
+        </div>
+      </div>
+
+      <div style="padding:14px 22px; display:flex; gap:8px; justify-content:center;">
+        <button class="pill-btn" onclick="navigate('notes')">Library</button>
+        <button class="pill-btn" onclick="navigate('settings')">System</button>
+      </div>
+    </div>
+
+    <!-- STATE: RECORDING -->
+    <div class="state atmo-recording hidden" id="state-recording">
+      <div class="soft-header">
+        <div style="width:10px; height:10px; border-radius:50%; background:oklch(0.72 0.22 28); box-shadow:0 0 16px oklch(0.72 0.22 28); animation:breathe-strong 1s ease-in-out infinite;"></div>
+        <div class="header-info">
+          <div class="header-title">Recording</div>
+          <div class="header-sub" style="color:oklch(0.72 0.15 30);">Listening…</div>
+        </div>
+        <div class="win-controls">
+          <button class="win-btn" onclick="send('minimize')" title="Hide">−</button>
+          <button class="win-btn close" onclick="send('close')" title="Close">×</button>
+        </div>
+      </div>
+
+      <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:18px;">
+        <div class="font-mono" id="timer" style="font-size:62px; font-weight:300; letter-spacing:-0.04em; color:oklch(0.98 0.01 280); font-variant-numeric:tabular-nums;">
+          00:00
+        </div>
+
+        <div id="blob-recording" class="blob-wrap" style="width:170px; height:170px; position:relative;">
+          <div class="ping-ring" style="animation-delay:0s;"></div>
+          <div class="ping-ring" style="animation-delay:0.63s;"></div>
+          <div class="ping-ring" style="animation-delay:1.26s;"></div>
+          <svg id="blob-svg-rec" viewBox="0 0 170 170" width="170" height="170">
+            <defs>
+              <radialGradient id="blob-grad-rec" cx="0.5" cy="0.5" r="0.85">
+                <stop offset="0" stop-color="oklch(0.94 0.13 63)"/>
+                <stop offset="0.35" stop-color="oklch(0.78 0.21 43)"/>
+                <stop offset="0.75" stop-color="oklch(0.62 0.22 28)"/>
+                <stop offset="1" stop-color="oklch(0.44 0.20 18)"/>
+              </radialGradient>
+              <radialGradient id="blob-sheen-rec" cx="0.5" cy="0.5" r="0.55">
+                <stop offset="0" stop-color="oklch(0.80 0.11 -32)" stop-opacity="0.45"/>
+                <stop offset="0.7" stop-color="oklch(0.80 0.11 -32)" stop-opacity="0"/>
+              </radialGradient>
+            </defs>
+            <path id="blob-path-rec" d="" fill="url(#blob-grad-rec)"/>
+            <path id="blob-path-rec-sheen" d="" fill="url(#blob-sheen-rec)" style="mix-blend-mode:screen"/>
+            <ellipse id="blob-specular-rec" cx="85" cy="55" rx="26" ry="14" fill="oklch(1 0 0 / 0.45)" style="filter:blur(8px)"/>
+          </svg>
+        </div>
+
+        <div id="waveform" class="waveform-bars"></div>
+        <div class="font-mono" style="font-size:11px; color:oklch(0.55 0.01 280); letter-spacing:0.06em;">
+          <span id="rec-info">16 kHz</span> · <span id="sample-rate-display">16 kHz</span>
+        </div>
+      </div>
+
+      <div style="padding:14px 22px; display:flex; gap:10px; justify-content:center;">
+        <button class="pill-btn" onclick="send('record')">Cancel</button>
+        <button class="pill-btn primary coral" onclick="send('record')">■  Stop</button>
+      </div>
+    </div>
+
+    <!-- STATE: TRANSCRIBING -->
+    <div class="state atmo-processing hidden" id="state-transcribing">
+      <div class="soft-header">
+        <div class="header-dot" style="background:radial-gradient(circle at 30% 30%, oklch(0.92 0.18 130), oklch(0.55 0.22 200)); box-shadow:0 4px 12px oklch(0.78 0.2 150 / 0.5); animation:breathe 2s ease-in-out infinite;"></div>
+        <div class="header-info">
+          <div class="header-title">Transcribing</div>
+          <div class="header-sub">Whisper · large-v3</div>
+        </div>
+        <div class="win-controls">
+          <button class="win-btn" onclick="send('minimize')" title="Hide">−</button>
+          <button class="win-btn close" onclick="send('close')" title="Close">×</button>
+        </div>
+      </div>
+
+      <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:24px; padding:0 36px;">
+        <div id="blob-transcribing" class="blob-wrap" style="width:130px; height:130px;">
+          <svg id="blob-svg-proc" viewBox="0 0 170 170" width="130" height="130">
+            <defs>
+              <radialGradient id="blob-grad-proc" cx="0.5" cy="0.5" r="0.85">
+                <stop offset="0" stop-color="oklch(0.94 0.09 180)"/>
+                <stop offset="0.35" stop-color="oklch(0.78 0.14 160)"/>
+                <stop offset="0.75" stop-color="oklch(0.62 0.15 145)"/>
+                <stop offset="1" stop-color="oklch(0.44 0.14 135)"/>
+              </radialGradient>
+              <radialGradient id="blob-sheen-proc" cx="0.5" cy="0.5" r="0.55">
+                <stop offset="0" stop-color="oklch(0.80 0.08 85)" stop-opacity="0.45"/>
+                <stop offset="0.7" stop-color="oklch(0.80 0.08 85)" stop-opacity="0"/>
+              </radialGradient>
+            </defs>
+            <path id="blob-path-proc" d="" fill="url(#blob-grad-proc)"/>
+            <path id="blob-path-proc-sheen" d="" fill="url(#blob-sheen-proc)" style="mix-blend-mode:screen"/>
+            <ellipse id="blob-specular-proc" cx="85" cy="55" rx="26" ry="14" fill="oklch(1 0 0 / 0.45)" style="filter:blur(8px)"/>
+          </svg>
+        </div>
+
+        <div class="shimmer font-display" style="font-size:24px; letter-spacing:-0.02em; font-style:italic; font-weight:400; text-align:center;">
+          turning sound into words…
+        </div>
+
+        <div class="progress-track" style="width:100%;">
+          <div class="progress-fill" id="transcribe-progress" style="width:0%;"></div>
+        </div>
+        <div class="font-mono" style="font-size:11px; color:oklch(0.72 0.01 280); letter-spacing:0.06em;">
+          <span id="transcribe-elapsed">00:00</span> elapsed
+        </div>
+      </div>
+      <div style="padding:14px;"></div>
+    </div>
+
+    <!-- STATE: POST-NOTE -->
+    <div class="state atmo-post hidden" id="state-post-note">
+      <div class="soft-header">
+        <div class="header-dot" style="background:radial-gradient(circle at 30% 30%, oklch(0.82 0.14 70), oklch(0.55 0.18 40)); box-shadow:0 4px 12px oklch(0.55 0.16 45 / 0.4);"></div>
+        <div class="header-info">
+          <div class="header-title">New note</div>
+          <div class="header-sub">
+            <span id="duration-label">00:00</span> · <span id="transcript-stats">0 words</span>
+          </div>
+        </div>
+        <div class="win-controls">
+          <button class="win-btn" onclick="send('minimize')" title="Hide">−</button>
+          <button class="win-btn close" onclick="send('close')" title="Close">×</button>
+        </div>
+      </div>
+
+      <div style="flex:1; display:flex; flex-direction:column; padding:4px 22px 10px; gap:12px; overflow:hidden;">
+        <input class="title-input" id="title-input" placeholder="Untitled note" autocomplete="off"/>
+
+        <div id="title-chip" class="title-chip loading hidden" onclick="acceptTitle()">
+          ✦ <span id="suggestion-text">suggesting…</span>
+        </div>
+
+        <textarea class="transcript-well" id="transcript-edit" oninput="updateTranscriptStats()" rows="4"></textarea>
+
+        <div>
+          <div style="font-size:10px; font-weight:700; letter-spacing:0.12em; color:oklch(0.70 0.01 280); text-transform:uppercase; margin-bottom:8px;">
+            Process with
+          </div>
+          <div class="engine-grid" id="engine-grid"></div>
+        </div>
+
+        <div id="custom-prompt-group" class="hidden">
+          <textarea class="custom-prompt-area" id="custom-prompt" placeholder="Enter your custom processing prompt…"></textarea>
+        </div>
+
+        <div class="check-row">
+          <input type="checkbox" id="clipboard-check"/>
+          <label for="clipboard-check">Copy transcript to clipboard</label>
+        </div>
+
+        <!-- Playback -->
+        <button id="playback-btn" class="pill-btn" onclick="togglePlayback()" style="align-self:flex-start; padding:6px 14px; font-size:12px;">
+          ▶ <span>Play</span>
+        </button>
+      </div>
+
+      <div style="padding:10px 22px 16px; display:flex; gap:10px; justify-content:space-between;">
+        <button class="pill-btn" onclick="confirmDiscard()">Discard</button>
+        <div style="display:flex; gap:8px;">
+          <button class="pill-btn primary" onclick="doSave()">Process & save ↵</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- STATE: POST-DICTATION -->
+    <div class="state atmo-post hidden" id="state-post-dictation">
+      <div class="soft-header">
+        <div class="header-dot" style="background:radial-gradient(circle at 30% 30%, oklch(0.82 0.14 70), oklch(0.55 0.18 40)); box-shadow:0 4px 12px oklch(0.55 0.16 45 / 0.4);"></div>
+        <div class="header-info">
+          <div class="header-title">Dictation</div>
+          <div class="header-sub">Copied to clipboard</div>
+        </div>
+        <div class="win-controls">
+          <button class="win-btn" onclick="send('minimize')" title="Hide">−</button>
+          <button class="win-btn close" onclick="send('close')" title="Close">×</button>
+        </div>
+      </div>
+
+      <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:20px; padding:0 28px;">
+        <div class="transcript-well" id="transcript-preview" style="max-height:200px; text-align:left; width:100%;"></div>
+
+        <button id="playback-btn-d" class="pill-btn" onclick="togglePlayback()" style="padding:6px 14px; font-size:12px;">
+          ▶ <span>Play</span>
+        </button>
+      </div>
+
+      <div style="padding:14px 22px; display:flex; gap:10px; justify-content:center;">
+        <button class="pill-btn" onclick="send('copy_again')">Copy again</button>
+        <button class="pill-btn primary" onclick="send('done')">Done</button>
+      </div>
+    </div>
+
+    <!-- STATE: SAVING -->
+    <div class="state atmo-processing hidden" id="state-saving">
+      <div class="soft-header">
+        <div class="header-dot" style="background:radial-gradient(circle at 30% 30%, oklch(0.92 0.18 130), oklch(0.55 0.22 200)); animation:breathe 1.5s ease-in-out infinite;"></div>
+        <div class="header-info">
+          <div class="header-title">Saving</div>
+          <div class="header-sub">Processing with Claude…</div>
+        </div>
+      </div>
+      <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:24px; padding:0 36px;">
+        <div id="blob-saving" class="blob-wrap" style="width:130px; height:130px;">
+          <svg id="blob-svg-save" viewBox="0 0 170 170" width="130" height="130">
+            <defs>
+              <radialGradient id="blob-grad-save" cx="0.5" cy="0.5" r="0.85">
+                <stop offset="0" stop-color="oklch(0.94 0.09 180)"/>
+                <stop offset="0.35" stop-color="oklch(0.78 0.14 160)"/>
+                <stop offset="0.75" stop-color="oklch(0.62 0.15 145)"/>
+                <stop offset="1" stop-color="oklch(0.44 0.14 135)"/>
+              </radialGradient>
+            </defs>
+            <path id="blob-path-save" d="" fill="url(#blob-grad-save)"/>
+          </svg>
+        </div>
+        <div class="shimmer font-display" style="font-size:20px; font-style:italic;">
+          processing your note…
+        </div>
+        <div class="progress-track" style="width:80%;">
+          <div class="progress-fill" style="width:100%;"></div>
+        </div>
+        <div class="font-mono" style="font-size:11px; color:var(--ink-3);">
+          <span id="saving-elapsed">00:00</span> elapsed
+        </div>
+      </div>
+    </div>
+
+    <!-- STATE: ERROR -->
+    <div class="state atmo-post hidden" id="state-error">
+      <div class="soft-header">
+        <div style="width:10px; height:10px; border-radius:50%; background:oklch(0.66 0.22 25);"></div>
+        <div class="header-info">
+          <div class="header-title" id="error-title">Error</div>
+          <div class="header-sub">Something went wrong</div>
+        </div>
+        <div class="win-controls">
+          <button class="win-btn" onclick="send('minimize')" title="Hide">−</button>
+          <button class="win-btn close" onclick="send('close')" title="Close">×</button>
+        </div>
+      </div>
+      <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:16px; padding:0 28px;">
+        <div style="font-size:40px;">⚠</div>
+        <div id="error-message" style="font-size:13px; color:var(--ink-1); text-align:center; line-height:1.6; max-height:200px; overflow:auto;"></div>
+      </div>
+      <div style="padding:14px 22px; display:flex; gap:10px; justify-content:center;">
+        <button class="pill-btn" onclick="copyError()">Copy error</button>
+        <button class="pill-btn" onclick="send('retry')">Retry</button>
+        <button class="pill-btn primary" onclick="send('discard')">Dismiss</button>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ===== PAGE: LIBRARY (Notes) ===== -->
+  <div class="page hidden" id="page-notes">
+    <div class="state atmo-library">
+      <div class="soft-header">
+        <button class="header-action" onclick="navigate('audio')">← Capture</button>
+        <div style="flex:1;"></div>
+        <div style="font-size:12px; color:oklch(0.72 0.01 280);" id="library-count"></div>
+        <div class="win-controls">
+          <button class="win-btn" onclick="send('minimize')" title="Hide">−</button>
+          <button class="win-btn close" onclick="send('close')" title="Close">×</button>
+        </div>
+      </div>
+      <div class="library-scroll">
+        <div class="library-search">
+          <span>⌕</span>
+          <span>Search your notes…</span>
+          <kbd>⌘K</kbd>
+        </div>
+        <div id="notes-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== PAGE: SETTINGS (System) ===== -->
+  <div class="page hidden" id="page-settings">
+    <div class="state atmo-settings">
+      <div class="soft-header">
+        <button class="header-action" onclick="navigate('audio')">← Capture</button>
+        <div style="flex:1;"></div>
+        <div class="header-title" style="font-size:13px;">System</div>
+        <div class="win-controls">
+          <button class="win-btn" onclick="send('minimize')" title="Hide">−</button>
+          <button class="win-btn close" onclick="send('close')" title="Close">×</button>
+        </div>
+      </div>
+      <div style="flex:1; overflow:auto; padding:12px 18px 16px;">
+
+        <div class="settings-card">
+          <div class="settings-row">
+            <span class="key">Default mode</span>
+            <div class="mode-toggle">
+              <button class="mode-btn active" data-default-mode="note" onclick="setDefaultModeUI('note')">Note</button>
+              <button class="mode-btn" data-default-mode="dictation" onclick="setDefaultModeUI('dictation')">Dictation</button>
+            </div>
+          </div>
+          <div class="settings-row">
+            <span class="key">Default action</span>
+            <span class="val" id="default-action-label" style="background:oklch(0.94 0.06 45); color:oklch(0.30 0.12 45); cursor:pointer;" onclick="cycleDefaultAction()">Clean & format</span>
+          </div>
+          <div class="settings-row">
+            <span class="key">Copy to clipboard</span>
+            <input type="checkbox" id="set-clipboard-default" onchange="settingsChanged()" style="accent-color:oklch(0.64 0.15 45);"/>
+          </div>
+          <div class="settings-row">
+            <span class="key">Hotkey</span>
+            <input class="settings-input" id="set-hotkey" value="f1" onchange="settingsChanged()"/>
+          </div>
+        </div>
+
+        <div class="settings-card">
+          <div style="font-weight:700; margin-bottom:8px; font-size:13px;">Engine</div>
+          <div class="settings-row">
+            <span class="key">Whisper model</span>
+            <span class="val" id="info-model" style="background:oklch(0.94 0.06 200); color:oklch(0.30 0.12 200);">—</span>
+          </div>
+          <div class="settings-row">
+            <span class="key">Sample rate</span>
+            <span class="val" id="info-sample" style="background:oklch(0.94 0.06 145); color:oklch(0.30 0.12 145);">—</span>
+          </div>
+        </div>
+
+        <div class="settings-card">
+          <div style="font-weight:700; margin-bottom:8px; font-size:13px;">Storage</div>
+          <div class="settings-row">
+            <span class="key">Vault</span>
+            <span class="val" id="info-vault" style="background:oklch(1 0 0 / 0.08); color:var(--ink-1); font-size:10px; max-width:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">—</span>
+          </div>
+          <div class="settings-row">
+            <span class="key">Notes folder</span>
+            <span class="val" id="info-notes" style="background:oklch(1 0 0 / 0.08); color:var(--ink-1); font-size:10px; max-width:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">—</span>
+          </div>
+          <div class="settings-row">
+            <span class="key">Version</span>
+            <span class="val" id="info-version" style="background:oklch(1 0 0 / 0.08); color:var(--ink-1);">—</span>
+          </div>
+        </div>
+
+        <button class="pill-btn primary" id="settings-save" onclick="saveSettings()" disabled style="width:100%; opacity:0.4;">
+          Save settings
+        </button>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- DISCARD CONFIRMATION MODAL -->
+<div id="discard-modal" class="modal-backdrop hidden">
+  <div class="modal" role="dialog" aria-labelledby="discard-title-modal">
+    <div class="modal-title" id="discard-title-modal">Discard capture?</div>
+    <div class="modal-body">Your transcript will be deleted permanently.</div>
+    <div class="modal-actions">
+      <button class="pill-btn" onclick="cancelDiscard()">Cancel</button>
+      <button class="pill-btn danger" onclick="confirmDiscardYes()">Discard</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ==========================================================================
+// Voice Notes — Soft Matter overlay logic
+// Preserves all Python→JS bridge functions from the original overlay.
+// ==========================================================================
+
+// ============ STATE ============
+
+var currentState = 'idle';
+var currentPage = 'audio';
+var currentMode = 'note';
+var selectedAction = 'clean_format';
+var defaultModeUI = 'note';
+var defaultActionUI = 'clean_format';
+var settingsDirty = false;
+var timerInterval = null;
+var elapsedInterval = null;
+var recordStartTime = null;
+var processingStartTime = null;
+var isPlaying = false;
+var lastError = '';
+var projectsList = [];
+var currentProject = '';
+var currentSettings = {};
+
+var ACTION_LABELS = {
+  clean_format: 'Clean & format',
+  action_items: 'Pull action items',
+  meeting_summary: 'Summarize meeting',
+  draft_email: 'Draft email',
+  raw: 'Raw transcript',
+  custom: 'Custom prompt'
+};
+
+var ENGINE_GLYPHS = {
+  clean_format: '✦',
+  action_items: '◆',
+  meeting_summary: '●',
+  draft_email: '✉',
+  raw: '≡',
+  custom: '✧'
+};
+
+var ENGINE_HUES = {
+  clean_format: 45,
+  action_items: 145,
+  meeting_summary: 200,
+  draft_email: 28,
+  raw: 60,
+  custom: 75
+};
+
+// ============ BRIDGE ============
+
+var _msgSeq = 0;
+function send(action, data) {
+  var msg = Object.assign({action: action, _seq: ++_msgSeq}, data || {});
+  document.title = 'BRIDGE:' + JSON.stringify(msg);
+}
+
+// ============ ENGINE PICKER ============
+
+function buildEngineGrid() {
+  var grid = document.getElementById('engine-grid');
+  grid.innerHTML = '';
+  var keys = Object.keys(ACTION_LABELS);
+  keys.forEach(function(k) {
+    var tile = document.createElement('button');
+    tile.className = 'engine-tile squish';
+    tile.dataset.action = k;
+    if (k === selectedAction) tile.classList.add('active');
+    var hue = ENGINE_HUES[k] || 45;
+
+    if (tile.classList.contains('active')) {
+      tile.style.background = 'linear-gradient(135deg, oklch(0.70 0.18 ' + hue + '), oklch(0.50 0.22 ' + hue + '))';
+      tile.style.boxShadow = '0 10px 24px oklch(0.55 0.22 ' + hue + ' / 0.45), 0 0 0 1.5px oklch(0.72 0.2 ' + hue + ' / 0.5)';
+      tile.style.border = 'none';
+    }
+
+    var glyph = document.createElement('span');
+    glyph.className = 'glyph';
+    glyph.textContent = ENGINE_GLYPHS[k] || '●';
+    glyph.style.color = tile.classList.contains('active') ? 'oklch(0.98 0.01 280)' : 'oklch(0.72 0.18 ' + hue + ')';
+
+    var name = document.createElement('span');
+    name.className = 'ename';
+    name.textContent = ACTION_LABELS[k];
+
+    tile.appendChild(glyph);
+    tile.appendChild(name);
+    tile.onclick = function() { selectAction(k); };
+    grid.appendChild(tile);
+  });
+}
+
+function selectAction(actionKey) {
+  selectedAction = actionKey;
+  buildEngineGrid();
+  var customGroup = document.getElementById('custom-prompt-group');
+  if (actionKey === 'custom') customGroup.classList.remove('hidden');
+  else customGroup.classList.add('hidden');
+}
+
+// ============ STATE TRANSITIONS ============
+
+function setState(state) {
+  document.querySelectorAll('#page-audio > .state').forEach(function(el) {
+    el.classList.add('hidden');
+  });
+
+  var stateMap = {
+    'idle': 'state-idle',
+    'recording': 'state-recording',
+    'transcribing': 'state-transcribing',
+    'post_note': 'state-post-note',
+    'post_dictation': 'state-post-dictation',
+    'saving': 'state-saving',
+    'error': 'state-error'
+  };
+
+  var elId = stateMap[state];
+  if (elId) document.getElementById(elId).classList.remove('hidden');
+  currentState = state;
+
+  if (state === 'recording') startTimer();
+  else { stopTimer(); resetWaveform(); }
+
+  if (state === 'transcribing' || state === 'saving') startElapsed(state);
+  else stopElapsed();
+
+  if (state === 'idle' || state === 'recording' || state === 'transcribing') {
+    if (currentPage !== 'audio') navigate('audio');
+  }
+
+  // Start/stop blob animations per state
+  updateBlobAnimations(state);
+}
+
+// ============ NAVIGATION ============
+
+function navigate(page) {
+  currentPage = page;
+  document.querySelectorAll('.page').forEach(function(el) { el.classList.add('hidden'); });
+  var pageMap = { audio: 'page-audio', notes: 'page-notes', settings: 'page-settings' };
+  document.getElementById(pageMap[page]).classList.remove('hidden');
+
+  if (page === 'notes') send('get_recent_notes');
+  if (page === 'settings') send('get_settings');
+}
+
+// ============ MODE TOGGLE ============
+
+function setMode(mode) {
+  currentMode = mode;
+  document.querySelectorAll('.mode-btn[data-mode]').forEach(function(btn) {
+    btn.classList.toggle('active', btn.dataset.mode === mode);
+  });
+  send('mode', {mode: mode});
+}
+
+function setModeFromPython(mode) {
+  currentMode = mode;
+  document.querySelectorAll('.mode-btn[data-mode]').forEach(function(btn) {
+    btn.classList.toggle('active', btn.dataset.mode === mode);
+  });
+}
+
+// ============ TIMER ============
+
+function startTimer() {
+  recordStartTime = Date.now();
+  updateTimerDisplay();
+  timerInterval = setInterval(updateTimerDisplay, 250);
+}
+
+function stopTimer() {
+  if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+}
+
+function updateTimerDisplay() {
+  if (!recordStartTime) return;
+  var elapsed = Math.floor((Date.now() - recordStartTime) / 1000);
+  var m = Math.floor(elapsed / 60);
+  var s = elapsed % 60;
+  document.getElementById('timer').textContent = m + ':' + String(s).padStart(2, '0');
+}
+
+function startElapsed(kind) {
+  processingStartTime = Date.now();
+  var id = kind === 'transcribing' ? 'transcribe-elapsed' : 'saving-elapsed';
+  var update = function() {
+    if (!processingStartTime) return;
+    var s = Math.floor((Date.now() - processingStartTime) / 1000);
+    var el = document.getElementById(id);
+    if (el) el.textContent = formatTime(s);
+  };
+  update();
+  elapsedInterval = setInterval(update, 500);
+}
+
+function stopElapsed() {
+  if (elapsedInterval) { clearInterval(elapsedInterval); elapsedInterval = null; }
+  processingStartTime = null;
+}
+
+function formatTime(seconds) {
+  var m = String(Math.floor(seconds / 60)).padStart(2, '0');
+  var s = String(seconds % 60).padStart(2, '0');
+  return m + ':' + s;
+}
+
+// ============ WAVEFORM ============
+
+var waveBars = [];
+var WAVE_COUNT = 48;
+var levelHistory = new Array(WAVE_COUNT).fill(0);
+
+function ensureWaveform() {
+  var container = document.getElementById('waveform');
+  if (waveBars.length === WAVE_COUNT) return;
+  container.innerHTML = '';
+  waveBars = [];
+  for (var i = 0; i < WAVE_COUNT; i++) {
+    var bar = document.createElement('div');
+    bar.className = 'bar';
+    bar.style.height = '3px';
+    bar.style.background = 'oklch(' + (0.70 + 0.15 * Math.random()).toFixed(2) + ' 0.20 ' + (28 + (i % 4) * 8) + ')';
+    container.appendChild(bar);
+    waveBars.push(bar);
+  }
+}
+
+function resetWaveform() {
+  levelHistory = new Array(WAVE_COUNT).fill(0);
+  if (waveBars.length) {
+    waveBars.forEach(function(b) { b.style.height = '3px'; b.style.opacity = '0.4'; });
+  }
+}
+
+function shapeLevel(v) {
+  if (v <= 0) return 0;
+  var shaped = Math.sqrt(v) * 1.6;
+  return Math.max(0, Math.min(1, shaped));
+}
+
+var MAX_BAR_PX = 50;
+var MIN_BAR_PX = 3;
+
+function setAudioLevel(level) {
+  ensureWaveform();
+  var shaped = shapeLevel(level);
+  levelHistory.shift();
+  levelHistory.push(shaped);
+  for (var i = 0; i < WAVE_COUNT; i++) {
+    var v = levelHistory[i];
+    var h = Math.max(MIN_BAR_PX, Math.round(v * MAX_BAR_PX));
+    waveBars[i].style.height = h + 'px';
+    waveBars[i].style.opacity = String(0.55 + v * 0.45);
+  }
+}
+
+// ============ BLOB ANIMATION ============
+// Noise-morphing SVG path + drifting oil-slick gradient.
+// Adapted from the React prototype's Blob component.
+
+var blobAnimations = {};  // keyed by element id prefix
+
+function hourHue(h) {
+  var stops = [
+    [0,340],[4,10],[7,45],[10,80],[13,135],[16,190],[19,240],[21,285],[23,320],[24,340]
+  ];
+  var t = ((h % 24) + 24) % 24;
+  for (var i = 0; i < stops.length - 1; i++) {
+    var h0 = stops[i][0], c0 = stops[i][1];
+    var h1 = stops[i+1][0], c1 = stops[i+1][1];
+    if (t >= h0 && t <= h1) {
+      var k = (t - h0) / (h1 - h0);
+      var delta = c1 - c0;
+      if (delta > 180) delta -= 360;
+      if (delta < -180) delta += 360;
+      return (c0 + delta * k + 360) % 360;
+    }
+  }
+  return stops[0][1];
+}
+
+function getTimeHue() {
+  var d = new Date();
+  return hourHue(d.getHours() + d.getMinutes() / 60 + d.getSeconds() / 3600);
+}
+
+function buildBlobPath(t, pulse, profile) {
+  var cx = 85, cy = 85, r0 = 68;
+  var N = 10;
+  var pts = [];
+  for (var i = 0; i < N; i++) {
+    var ang = (i / N) * Math.PI * 2;
+    var n =
+      Math.sin(t * 0.0011 * profile.speed + i * 1.7) * 0.5 +
+      Math.sin(t * 0.0017 * profile.speed + i * 0.9) * 0.3 +
+      Math.sin(t * 0.0029 * profile.speed + i * 2.3) * 0.2;
+    var r = r0 + profile.amp * n + pulse * 14 * Math.sin(i * 0.7 + t * 0.02);
+    pts.push([cx + Math.cos(ang) * r, cy + Math.sin(ang) * r]);
+  }
+  var d = 'M ' + pts[0][0].toFixed(2) + ' ' + pts[0][1].toFixed(2);
+  for (var i = 0; i < N; i++) {
+    var p0 = pts[(i - 1 + N) % N];
+    var p1 = pts[i];
+    var p2 = pts[(i + 1) % N];
+    var p3 = pts[(i + 2) % N];
+    var k = 0.18;
+    var c1x = p1[0] + (p2[0] - p0[0]) * k;
+    var c1y = p1[1] + (p2[1] - p0[1]) * k;
+    var c2x = p2[0] - (p3[0] - p1[0]) * k;
+    var c2y = p2[1] - (p3[1] - p1[1]) * k;
+    d += ' C ' + c1x.toFixed(2) + ' ' + c1y.toFixed(2) + ', ' + c2x.toFixed(2) + ' ' + c2y.toFixed(2) + ', ' + p2[0].toFixed(2) + ' ' + p2[1].toFixed(2);
+  }
+  return d + ' Z';
+}
+
+function startBlobAnimation(prefix, profile) {
+  if (blobAnimations[prefix]) cancelAnimationFrame(blobAnimations[prefix].raf);
+  var start = performance.now();
+  var pulse = 0;
+  var state = { raf: 0, pulse: 0 };
+
+  var pathEl = document.getElementById('blob-path-' + prefix);
+  var sheenEl = document.getElementById('blob-path-' + prefix + '-sheen');
+  var specEl = document.getElementById('blob-specular-' + prefix);
+  var gradEl = document.getElementById('blob-grad-' + prefix);
+  var sheenGradEl = document.getElementById('blob-sheen-' + prefix);
+
+  function loop() {
+    var t = performance.now() - start;
+    var hueBase = profile.hueBase;
+    if (profile.useTimeHue) hueBase = getTimeHue();
+
+    var driftX = Math.sin(t * 0.00042 * profile.speed) * profile.centerDrift;
+    var driftY = Math.cos(t * 0.00037 * profile.speed) * profile.centerDrift;
+    var hue = hueBase + Math.sin(t * 0.0006 * profile.speed) * profile.hueSpread * 0.5 + state.pulse * 25;
+
+    var pathD = buildBlobPath(t, state.pulse, profile);
+    if (pathEl) pathEl.setAttribute('d', pathD);
+    if (sheenEl) sheenEl.setAttribute('d', pathD);
+
+    // Update gradient
+    if (gradEl) {
+      gradEl.setAttribute('cx', (0.5 + driftX).toFixed(3));
+      gradEl.setAttribute('cy', (0.5 + driftY).toFixed(3));
+      var ch = profile.chroma;
+      var stops = gradEl.querySelectorAll('stop');
+      if (stops.length >= 4) {
+        stops[0].setAttribute('stop-color', 'oklch(0.94 ' + (ch*0.6).toFixed(3) + ' ' + (hue+35).toFixed(0) + ')');
+        stops[1].setAttribute('stop-color', 'oklch(0.78 ' + (ch*0.95).toFixed(3) + ' ' + (hue+15).toFixed(0) + ')');
+        stops[2].setAttribute('stop-color', 'oklch(0.62 ' + ch.toFixed(3) + ' ' + hue.toFixed(0) + ')');
+        stops[3].setAttribute('stop-color', 'oklch(0.44 ' + (ch*0.9).toFixed(3) + ' ' + (hue-10).toFixed(0) + ')');
+      }
+    }
+    // Update sheen gradient
+    if (sheenGradEl) {
+      sheenGradEl.setAttribute('cx', (0.5 - driftX).toFixed(3));
+      sheenGradEl.setAttribute('cy', (0.5 - driftY).toFixed(3));
+      var sheenHue = hue - 60;
+      var sheenStops = sheenGradEl.querySelectorAll('stop');
+      if (sheenStops.length >= 2) {
+        sheenStops[0].setAttribute('stop-color', 'oklch(0.80 ' + (ch*0.5).toFixed(3) + ' ' + sheenHue.toFixed(0) + ')');
+        sheenStops[1].setAttribute('stop-color', 'oklch(0.80 ' + (ch*0.5).toFixed(3) + ' ' + sheenHue.toFixed(0) + ')');
+      }
+    }
+    // Update specular
+    if (specEl) {
+      specEl.setAttribute('cx', (85 + driftX * 60).toFixed(1));
+      specEl.setAttribute('cy', (55 + driftY * 60).toFixed(1));
+    }
+
+    // Update drop shadow on wrapper
+    var wrap = pathEl ? pathEl.closest('.blob-wrap') : null;
+    if (wrap) {
+      wrap.style.filter = 'drop-shadow(0 20px 40px oklch(0.48 ' + (ch*0.8).toFixed(2) + ' ' + (hue+10).toFixed(0) + ' / 0.42))';
+    }
+
+    // Update ping ring hue (recording)
+    var rings = wrap ? wrap.querySelectorAll('.ping-ring') : [];
+    rings.forEach(function(r) {
+      r.style.borderColor = 'oklch(0.72 0.22 ' + hue.toFixed(0) + ')';
+    });
+
+    // Decay pulse
+    state.pulse *= 0.94;
+    if (state.pulse < 0.01) state.pulse = 0;
+
+    state.raf = requestAnimationFrame(loop);
+  }
+  state.raf = requestAnimationFrame(loop);
+  blobAnimations[prefix] = state;
+}
+
+function stopBlobAnimation(prefix) {
+  if (blobAnimations[prefix]) {
+    cancelAnimationFrame(blobAnimations[prefix].raf);
+    delete blobAnimations[prefix];
+  }
+}
+
+var BLOB_PROFILES = {
+  idle:       { amp: 4, speed: 0.9, hueSpread: 40, hueBase: 55,  chroma: 0.16, centerDrift: 0.10, useTimeHue: true },
+  recording:  { amp: 11, speed: 2.8, hueSpread: 75, hueBase: 25, chroma: 0.22, centerDrift: 0.22, useTimeHue: false },
+  processing: { amp: 5, speed: 1.2, hueSpread: 60, hueBase: 145, chroma: 0.15, centerDrift: 0.14, useTimeHue: false },
+  saving:     { amp: 5, speed: 1.2, hueSpread: 60, hueBase: 145, chroma: 0.15, centerDrift: 0.14, useTimeHue: false }
+};
+
+function updateBlobAnimations(state) {
+  // Stop all
+  Object.keys(blobAnimations).forEach(stopBlobAnimation);
+
+  if (state === 'idle') {
+    startBlobAnimation('idle', BLOB_PROFILES.idle);
+  } else if (state === 'recording') {
+    startBlobAnimation('rec', BLOB_PROFILES.recording);
+  } else if (state === 'transcribing') {
+    startBlobAnimation('proc', BLOB_PROFILES.processing);
+  } else if (state === 'saving') {
+    startBlobAnimation('save', BLOB_PROFILES.saving);
+  }
+}
+
+// ============ TITLE SUGGESTION ============
+
+function acceptTitle() {
+  var suggestion = document.getElementById('suggestion-text').textContent;
+  if (suggestion === 'suggesting…') return;
+  document.getElementById('title-input').value = suggestion;
+  document.getElementById('title-chip').classList.add('hidden');
+}
+
+function updateTitleSuggestion(title) {
+  var chip = document.getElementById('title-chip');
+  document.getElementById('suggestion-text').textContent = title;
+  chip.classList.remove('loading', 'hidden');
+}
+
+// ============ TRANSCRIPT ============
+
+function setTranscript(text) {
+  var ta = document.getElementById('transcript-edit');
+  ta.value = text || '';
+  updateTranscriptStats();
+}
+
+function updateTranscriptStats() {
+  var v = document.getElementById('transcript-edit').value;
+  var words = v.trim() ? v.trim().split(/\s+/).length : 0;
+  var stats = document.getElementById('transcript-stats');
+  if (stats) stats.textContent = words + ' word' + (words === 1 ? '' : 's');
+}
+
+function setDuration(seconds) {
+  var el = document.getElementById('duration-label');
+  if (el) el.textContent = formatTime(seconds);
+}
+
+// ============ PLAYBACK ============
+
+function togglePlayback() {
+  if (isPlaying) send('stop_playback');
+  else send('playback');
+}
+
+function setPlayingState(playing) {
+  isPlaying = playing;
+  ['playback-btn', 'playback-btn-d'].forEach(function(id) {
+    var b = document.getElementById(id);
+    if (!b) return;
+    b.classList.toggle('playing', playing);
+    var spans = b.querySelectorAll('span');
+    var lbl = spans.length > 0 ? spans[spans.length - 1] : null;
+    if (lbl) lbl.textContent = playing ? 'Stop' : 'Play';
+    // Update icon prefix
+    b.childNodes[0].textContent = playing ? '■ ' : '▶ ';
+  });
+}
+
+// ============ PROJECT PICKER ============
+
+function setProjects(projects) {
+  projectsList = projects || [];
+  if (projectsList.length > 0) currentProject = projectsList[0].flag || '';
+}
+
+function selectProject(p) {
+  currentProject = p.flag || '';
+}
+
+// ============ DISCARD ============
+
+function confirmDiscard() {
+  var t = document.getElementById('transcript-edit');
+  if (!t || !t.value.trim()) { send('discard'); return; }
+  document.getElementById('discard-modal').classList.remove('hidden');
+}
+
+function cancelDiscard() { document.getElementById('discard-modal').classList.add('hidden'); }
+function confirmDiscardYes() { document.getElementById('discard-modal').classList.add('hidden'); send('discard'); }
+
+// ============ SAVE ============
+
+function doSave() {
+  try {
+    send('debug', {where: 'doSave-entered'});
+    var titleEl = document.getElementById('title-input');
+    var clipEl = document.getElementById('clipboard-check');
+    var promptEl = document.getElementById('custom-prompt');
+    var title = titleEl ? titleEl.value : '';
+    var copyClipboard = clipEl ? !!clipEl.checked : false;
+    var customPrompt = promptEl ? promptEl.value : '';
+
+    send('save', {
+      title: title,
+      actionType: selectedAction,
+      project: currentProject || '',
+      copyClipboard: copyClipboard,
+      customPrompt: customPrompt
+    });
+  } catch (e) {
+    send('debug', {where: 'doSave-error', err: String(e && e.message || e)});
+  }
+}
+
+// ============ ERROR ============
+
+function showError(title, message) {
+  document.getElementById('error-title').textContent = title || 'System fault';
+  document.getElementById('error-message').textContent = message || '';
+  lastError = (title || '') + '\n' + (message || '');
+  setState('error');
+}
+
+function copyError() { send('copy_error', {text: lastError}); }
+
+// ============ TRANSCRIPT PREVIEW (dictation) ============
+
+function setTranscriptPreview(text) {
+  document.getElementById('transcript-preview').textContent = text;
+}
+
+// ============ POST-NOTE PREP ============
+
+function setPostNoteData(data) {
+  setTranscript(data.transcript || '');
+  setDuration(data.duration || 0);
+  document.getElementById('title-input').value = '';
+  var chip = document.getElementById('title-chip');
+  chip.classList.add('loading');
+  chip.classList.remove('hidden');
+  document.getElementById('suggestion-text').textContent = 'suggesting…';
+  document.getElementById('custom-prompt-group').classList.add('hidden');
+  document.getElementById('custom-prompt').value = '';
+  setDefaultAction(defaultActionUI);
+  buildEngineGrid();
+  setPlayingState(false);
+}
+
+// ============ CONFIG ============
+
+function setDefaultAction(action) {
+  selectedAction = action;
+  buildEngineGrid();
+}
+
+function setClipboardDefault(checked) {
+  document.getElementById('clipboard-check').checked = checked;
+}
+
+function setHotkey(key) {
+  document.getElementById('hotkey-display').textContent = key.toUpperCase();
+}
+
+function setSampleRate(hz) {
+  var khz = (hz / 1000).toFixed(hz % 1000 === 0 ? 0 : 1);
+  var el = document.getElementById('sample-rate-display');
+  if (el) el.textContent = khz + ' kHz';
+  var ri = document.getElementById('rec-info');
+  if (ri) ri.textContent = khz + ' kHz';
+}
+
+function setEngineModel(model) {
+  // Reserved for future use
+}
+
+function setVersion(v) {
+  var el = document.getElementById('info-version');
+  if (el) el.textContent = 'v' + v;
+}
+
+// ============ SETTINGS ============
+
+function setSettings(s) {
+  currentSettings = s || {};
+  defaultModeUI = s.default_mode || 'note';
+  defaultActionUI = s.default_action || 'clean_format';
+  document.querySelectorAll('.mode-btn[data-default-mode]').forEach(function(btn) {
+    btn.classList.toggle('active', btn.dataset.defaultMode === defaultModeUI);
+  });
+  document.getElementById('default-action-label').textContent = ACTION_LABELS[defaultActionUI] || defaultActionUI;
+  document.getElementById('set-clipboard-default').checked = !!s.copy_to_clipboard;
+  document.getElementById('set-hotkey').value = s.hotkey || '';
+  document.getElementById('info-model').textContent = s.whisper_model || '—';
+  document.getElementById('info-sample').textContent = (s.sample_rate || 0) + ' Hz';
+  document.getElementById('info-vault').textContent = s.vault_path || '—';
+  document.getElementById('info-vault').title = s.vault_path || '';
+  document.getElementById('info-notes').textContent = s.notes_folder || '—';
+  document.getElementById('info-notes').title = s.notes_folder || '';
+  document.getElementById('info-version').textContent = s.version || '—';
+  settingsDirty = false;
+  var btn = document.getElementById('settings-save');
+  btn.disabled = true;
+  btn.style.opacity = '0.4';
+}
+
+function setDefaultModeUI(mode) {
+  defaultModeUI = mode;
+  document.querySelectorAll('.mode-btn[data-default-mode]').forEach(function(btn) {
+    btn.classList.toggle('active', btn.dataset.defaultMode === mode);
+  });
+  settingsChanged();
+}
+
+var ACTION_KEYS = ['clean_format', 'action_items', 'meeting_summary', 'draft_email', 'raw'];
+function cycleDefaultAction() {
+  var idx = ACTION_KEYS.indexOf(defaultActionUI);
+  idx = (idx + 1) % ACTION_KEYS.length;
+  defaultActionUI = ACTION_KEYS[idx];
+  document.getElementById('default-action-label').textContent = ACTION_LABELS[defaultActionUI];
+  settingsChanged();
+}
+
+function settingsChanged() {
+  settingsDirty = true;
+  var btn = document.getElementById('settings-save');
+  btn.disabled = false;
+  btn.style.opacity = '1';
+}
+
+function saveSettings() {
+  send('save_settings', {
+    default_mode: defaultModeUI,
+    default_action: defaultActionUI,
+    copy_to_clipboard: document.getElementById('set-clipboard-default').checked,
+    hotkey: document.getElementById('set-hotkey').value
+  });
+}
+
+// ============ RECENT NOTES (Library) ============
+
+function setRecentNotes(notes) {
+  var list = document.getElementById('notes-list');
+  list.innerHTML = '';
+  var countEl = document.getElementById('library-count');
+
+  if (!notes || !notes.length) {
+    if (countEl) countEl.textContent = '';
+    var empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.innerHTML = '<div style="font-size:32px; opacity:0.3;">🎙</div><span>No captures yet — record one to begin.</span>';
+    list.appendChild(empty);
+    return;
+  }
+
+  if (countEl) countEl.textContent = notes.length + ' notes';
+
+  // Group by relative date
+  var groups = {};
+  var groupOrder = [];
+  notes.forEach(function(n) {
+    var key = n.modified || 'Other';
+    // Simplify: group "just now", "Xm ago", "Xh ago" as "Today"
+    if (key === 'just now' || key.indexOf('m ago') >= 0 || key.indexOf('h ago') >= 0) key = 'Today';
+    else if (key.indexOf('1d ago') >= 0) key = 'Yesterday';
+    else if (key.indexOf('d ago') >= 0) key = key;
+    if (!groups[key]) { groups[key] = []; groupOrder.push(key); }
+    groups[key].push(n);
+  });
+
+  groupOrder.forEach(function(day) {
+    var grp = groups[day];
+    var group = document.createElement('div');
+    group.className = 'day-group';
+
+    var header = document.createElement('div');
+    header.className = 'day-header';
+    header.innerHTML = '<div class="day-label">' + day + '</div>' +
+      '<div class="day-meta">' + grp.length + ' note' + (grp.length > 1 ? 's' : '') + '</div>';
+    group.appendChild(header);
+
+    var grid = document.createElement('div');
+    grid.className = 'bento-grid';
+
+    grp.forEach(function(n, i) {
+      var big = i === 0 && n.duration > 120;
+      var card = document.createElement('button');
+      card.className = 'bento-card squish ' + (big ? 'big' : 'half');
+      card.onclick = function() { send('open_note', {filename: n.filename}); };
+
+      // Pick an engine hue based on title hash
+      var hue = 45;
+      var hash = 0;
+      for (var c = 0; c < n.title.length; c++) hash = ((hash << 5) - hash) + n.title.charCodeAt(c);
+      var hues = [45, 145, 200, 28, 75];
+      hue = hues[Math.abs(hash) % hues.length];
+
+      card.innerHTML =
+        '<div class="stripe" style="background:oklch(0.72 0.18 ' + hue + ');"></div>' +
+        '<div style="display:flex; justify-content:space-between; align-items:baseline;">' +
+          '<div class="card-title">' + escHtml(n.title) + '</div>' +
+          '<div class="card-time">' + (n.modified || '') + '</div>' +
+        '</div>' +
+        '<div class="card-meta">' +
+          (n.duration ? '<span class="card-dur">' + formatTime(n.duration) + '</span>' : '') +
+        '</div>';
+
+      grid.appendChild(card);
+    });
+
+    group.appendChild(grid);
+    list.appendChild(group);
+  });
+}
+
+function escHtml(s) {
+  var d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+// ============ KEYBOARD SHORTCUTS ============
+
+document.addEventListener('keydown', function(e) {
+  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+    e.preventDefault();
+    if (currentState === 'post_note') doSave();
+    return;
+  }
+  if ((e.metaKey || e.ctrlKey) && (e.key === '1' || e.key === '2')) {
+    if (currentState === 'idle') {
+      e.preventDefault();
+      setMode(e.key === '1' ? 'note' : 'dictation');
+    }
+    return;
+  }
+  if ((e.metaKey || e.ctrlKey) && e.key === ',') {
+    e.preventDefault();
+    navigate('settings');
+    return;
+  }
+  if (e.key === 'Escape') {
+    if (!document.getElementById('discard-modal').classList.contains('hidden')) {
+      cancelDiscard(); return;
+    }
+    if (currentState === 'post_note') confirmDiscard();
+    else if (currentState === 'post_dictation') send('done');
+    else if (currentState === 'error') send('discard');
+    else if (currentPage !== 'audio') navigate('audio');
+    else send('close');
+    return;
+  }
+  if (e.key === ' ' && currentState === 'idle' && currentPage === 'audio') {
+    var tag = document.activeElement.tagName;
+    if (tag !== 'INPUT' && tag !== 'TEXTAREA') {
+      e.preventDefault();
+      send('record');
+    }
+  }
+});
+
+// ============ INIT ============
+
+buildEngineGrid();
+ensureWaveform();
+
+// Start idle blob animation
+startBlobAnimation('idle', BLOB_PROFILES.idle);
+</script>
+</body>
+</html>
