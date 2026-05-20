@@ -1,0 +1,28 @@
+{
+  "expo": {
+    "name": "Voice Notes",
+    "slug": "voice-notes",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "backgroundColor": "#1a1410"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.swiftkick53.voicenotes",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Voice Notes needs your microphone to record voice notes.",
+        "NSDocumentsFolderUsageDescription": "Voice Notes saves notes to your iCloud Drive."
+      }
+    },
+    "android": {
+      "package": "com.swiftkick53.voicenotes",
+      "permissions": ["RECORD_AUDIO", "READ_EXTERNAL_STORAGE", "WRITE_EXTERNAL_STORAGE"]
+    },
+    "plugins": [
+      ["expo-av", { "microphonePermission": "Voice Notes needs your microphone to record voice notes." }]
+    ]
+  }
+}

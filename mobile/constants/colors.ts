@@ -1,0 +1,21 @@
+// Soft Matter warm dark palette — matches the macOS overlay exactly
+export const colors = {
+  bg:       '#1a1410',
+  bg2:      '#1f1a15',
+  bg3:      '#252019',
+  surface:  '#231e18',
+  ink0:     '#f7f3ee',
+  ink1:     '#ddd5c9',
+  ink2:     '#8a7f74',
+  ink3:     '#5c5249',
+  hairline: 'rgba(255,255,255,0.08)',
+  coral:    '#d4614a',
+  coralHi:  '#e8856e',
+  amber:    '#c8882a',
+  amberHi:  '#dba045',
+  sage:     '#5a9e6f',
+  sageHi:   '#72b886',
+  ocean:    '#4a8fa8',
+  oceanHi:  '#62a8c2',
+  peach:    '#e8c89a',
+};

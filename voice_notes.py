@@ -1117,6 +1117,7 @@ class VoiceNotesApp(rumps.App):
         ]
 
         self.overlay = None
+        self._previous_app = None  # frontmost app captured just before F1 shows overlay
 
         # State for current recording
         self._transcript = None
@@ -1198,6 +1199,11 @@ class VoiceNotesApp(rumps.App):
         overlay = self._ensure_overlay()
 
         if self.state == AppState.IDLE:
+            # Capture frontmost app BEFORE the overlay steals focus,
+            # so dictation mode can restore focus and type there.
+            from AppKit import NSWorkspace
+            self._previous_app = NSWorkspace.sharedWorkspace().frontmostApplication()
+            debug(f"[voice-notes] Previous app: {self._previous_app.bundleIdentifier() if self._previous_app else 'none'}")
             if not overlay.is_visible():
                 overlay.show()
             self.start_recording()
@@ -1316,10 +1322,31 @@ class VoiceNotesApp(rumps.App):
         debug("[voice-notes] Showing post-recording UI")
 
     def _show_dictation_result(self, transcript):
-        self.state = AppState.POST_RECORDING
+        """In dictation mode: hide overlay, restore focus to previous app, type transcript."""
+        self.state = AppState.IDLE
         self._set_icon(ICON_IDLE)
-        self._ensure_overlay().set_post_dictation(transcript)
-        debug("[voice-notes] Showing dictation result")
+        overlay = self._ensure_overlay()
+        overlay.hide()
+        debug("[voice-notes] Dictation: typing at cursor")
+        prev = self._previous_app
+        self._previous_app = None
+        threading.Thread(
+            target=lambda: self._type_at_cursor(transcript, prev),
+            daemon=True,
+        ).start()
+
+    def _type_at_cursor(self, text, prev_app):
+        """Restore focus to prev_app and type text at the cursor position."""
+        try:
+            if prev_app:
+                from AppKit import NSApplicationActivateIgnoringOtherApps
+                prev_app.activateWithOptions_(NSApplicationActivateIgnoringOtherApps)
+                time.sleep(0.25)  # wait for focus to transfer
+            from pynput.keyboard import Controller
+            Controller().type(text)
+            debug(f"[voice-notes] Typed {len(text)} chars at cursor")
+        except Exception as exc:
+            debug(f"[voice-notes] _type_at_cursor error: {exc!r}")
 
     def _suggest_title(self, transcript):
         title = suggest_title(transcript)
