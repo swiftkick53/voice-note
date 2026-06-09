@@ -10,6 +10,8 @@
 #     "pynput>=1.7.0",
 #     "pyobjc-framework-Cocoa>=10.0",
 #     "pyobjc-framework-WebKit>=10.0",
+#     "pyobjc-framework-Speech>=10.0",
+#     "pyobjc-framework-AVFoundation>=10.0",
 # ]
 # ///
 
@@ -113,8 +115,26 @@ VAULT = Path(os.path.expanduser(CONFIG.get("vault_path", "~/Documents/Claude Bra
 NOTES_DIR = VAULT / CONFIG.get("notes_folder", "08 Summaries/Voice Notes")
 DAILY_DIR = VAULT / "02 Daily"
 WHISPER_MODEL = CONFIG.get("whisper_model", "mlx-community/whisper-large-v3-turbo")
+
+# Force HuggingFace offline mode when the model is already in the local cache.
+# Recent huggingface_hub versions hang (sometimes 10+ minutes, 0% CPU) on
+# their online repo check before falling back to cache; offline mode loads
+# the cached model in seconds. Left online only when the model still needs
+# its first download.
+_hf_model_cache = Path(os.path.expanduser("~/.cache/huggingface/hub")) / (
+    "models--" + WHISPER_MODEL.replace("/", "--")
+)
+if _hf_model_cache.exists():
+    os.environ.setdefault("HF_HUB_OFFLINE", "1")
 SAMPLE_RATE = CONFIG.get("sample_rate", 16000)
 INPUT_CHANNEL = CONFIG.get("input_channel", 1)
+# input_device: device index (int) or name substring (str). None = system default.
+INPUT_DEVICE = CONFIG.get("input_device", None)
+# Max recording length in seconds before auto-stop (default 10 min).
+# Minutes before showing the "still recording?" reminder in the overlay.
+RECORD_REMINDER_MINUTES = CONFIG.get("record_reminder_minutes", 30)
+# Max duration to attempt transcription — refuse anything longer (default 2 hours).
+MAX_TRANSCRIBE_SECONDS = CONFIG.get("max_transcribe_seconds", 7200)
 NOTES_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -200,7 +220,7 @@ class Recorder:
         self.last_level = 0.0  # 0..1, RMS-derived for visualization
 
     def _callback(self, indata, frames, time_info, status):
-        ch = INPUT_CHANNEL - 1
+        ch = min(INPUT_CHANNEL - 1, indata.shape[1] - 1)
         chunk = indata[:, ch:ch + 1].copy()
         self.audio_queue.put(chunk)
         # Compute simple RMS for level meter
@@ -216,18 +236,75 @@ class Recorder:
         except Exception:
             pass
 
+    @staticmethod
+    def _resolve_device(device_cfg):
+        """Resolve INPUT_DEVICE config value to a sounddevice device index or None.
+
+        Accepts:
+          None      → system default
+          int       → use that index directly
+          str       → find first input device whose name contains that substring (case-insensitive)
+        """
+        if device_cfg is None:
+            return None
+        if isinstance(device_cfg, int):
+            return device_cfg
+        # String: match by name
+        needle = device_cfg.lower()
+        for i, info in enumerate(sd.query_devices()):
+            if int(info.get('max_input_channels', 0)) > 0 and needle in info['name'].lower():
+                debug(f"[voice-notes] Resolved device '{device_cfg}' → [{i}] {info['name']}")
+                return i
+        debug(f"[voice-notes] WARNING: input_device '{device_cfg}' not found, using default")
+        return None
+
+    def _open_stream(self, device=None):
+        """Open an InputStream on the given device index (None = system default)."""
+        dev_idx = sd.default.device[0] if device is None else device
+        info = sd.query_devices(dev_idx, 'input')
+        max_ch = int(info.get('max_input_channels', 0))
+        ch = min(INPUT_CHANNEL, max_ch) if max_ch > 0 else INPUT_CHANNEL
+        debug(f"[voice-notes] Opening stream: [{dev_idx}] {info['name']}  "
+              f"ch={ch}/{max_ch}  sr={self.sample_rate}")
+        stream = sd.InputStream(
+            device=device,
+            samplerate=self.sample_rate,
+            channels=ch,
+            dtype="float32",
+            callback=self._callback,
+        )
+        stream.start()
+        return stream
+
     def start(self):
         self.audio_queue = queue.Queue()
         self.recording = True
         self.start_time = time.time()
         self.last_level = 0.0
-        self.stream = sd.InputStream(
-            samplerate=self.sample_rate,
-            channels=INPUT_CHANNEL,
-            dtype="float32",
-            callback=self._callback,
+        last_exc = None
+
+        # Try configured device first, then fall back through all input devices.
+        preferred = self._resolve_device(INPUT_DEVICE)
+        candidates = [preferred] if preferred is not None else []
+        # Append all other input devices as fallbacks (skipping already-tried preferred)
+        candidates += [
+            i for i, info in enumerate(sd.query_devices())
+            if int(info.get('max_input_channels', 0)) > 0 and i != preferred
+        ]
+
+        for device in candidates:
+            try:
+                self.stream = self._open_stream(device=device)
+                return
+            except Exception as exc:
+                debug(f"[voice-notes] Device {device} failed: {exc}")
+                last_exc = exc
+
+        self.recording = False
+        raise RuntimeError(
+            f"Could not open any microphone. Check System Settings → Privacy & Security → Microphone. "
+            f"Last error: {last_exc}"
         )
-        self.stream.start()
 
     def stop(self):
         self.recording = False
@@ -258,6 +335,9 @@ class Recorder:
 # ---------------------------------------------------------------------------
 
 _whisper_loaded = False
+# MLX can't run two transcriptions at once (each would load its own copy of
+# the model); serialize all calls — including the startup pre-warm.
+_whisper_lock = threading.Lock()
 
 
 def transcribe(wav_path):
@@ -280,8 +360,16 @@ def transcribe(wav_path):
     if data.ndim > 1:
         data = data.mean(axis=1)
 
-    result = mlx_whisper.transcribe(data, path_or_hf_repo=WHISPER_MODEL, language="en")
+    with _whisper_lock:
+        result = mlx_whisper.transcribe(data, path_or_hf_repo=WHISPER_MODEL, language="en")
     return result.get("text", "").strip()
+
+
+# NOTE: do not add a startup model pre-warm thread. Importing/loading MLX
+# in a background thread during app init deadlocks (wedged at ~124MB RSS,
+# never loads), and any lock around it then blocks real transcriptions
+# behind the wedged thread. Lazy-load on first transcription instead —
+# the first-run timeout already includes +300s headroom for the load.
 
 
 # ---------------------------------------------------------------------------
@@ -599,23 +687,48 @@ def parse_hotkey(hotkey_str):
     return modifiers, key
 
 
-def start_hotkey_listener(toggle_callback):
-    hotkey_str = CONFIG.get("hotkey", "cmd+shift+r")
-    modifiers, key = parse_hotkey(hotkey_str)
+def start_hotkey_listener(dictation_callback, note_callback):
+    """Listen for F1 (dictation) and F2 (note) hotkeys.
 
-    if not key:
-        print(f"Warning: Could not parse hotkey '{hotkey_str}', hotkey disabled.")
-        return
-
+    Falls back to the legacy single-hotkey config if present so existing
+    users aren't broken. New default: F1=dictation, F2=note.
+    """
     from pynput import keyboard
+
+    # Build list of (modifiers, key, callback) tuples to watch
+    bindings = []
+
+    # Check for legacy single-hotkey config — keep it working as note mode
+    legacy = CONFIG.get("hotkey", "")
+    if legacy and legacy.lower() not in ("f1", "f2"):
+        mods, k = parse_hotkey(legacy)
+        if k:
+            bindings.append((mods, k, note_callback))
+
+    # F1 → dictation, F2 → note (always registered)
+    _, f1 = parse_hotkey("f1")
+    _, f2 = parse_hotkey("f2")
+    if f1:
+        bindings.append((set(), f1, dictation_callback))
+    if f2:
+        bindings.append((set(), f2, note_callback))
+
+    if not bindings:
+        print("Warning: no valid hotkeys configured.")
+        return
 
     current_modifiers = set()
 
     def on_press(k):
-        if k in modifiers:
+        from pynput.keyboard import Key
+        if k in (Key.cmd, Key.ctrl, Key.alt, Key.shift,
+                 Key.cmd_r, Key.ctrl_r, Key.alt_r, Key.shift_r):
             current_modifiers.add(k)
-        if current_modifiers == modifiers and k == key:
-            toggle_callback()
+        for mods, trigger, cb in bindings:
+            # Normalise cmd_l/cmd_r etc. for modifier check
+            required = mods
+            if current_modifiers >= required and k == trigger:
+                cb()
 
     def on_release(k):
         current_modifiers.discard(k)
@@ -1124,9 +1237,10 @@ class VoiceNotesApp(rumps.App):
         self._wav_path = None
         self._duration = 0
         self._last_save_body = None  # for retry
+        self._auto_stop_timer = None
 
-        # Start hotkey listener
-        start_hotkey_listener(self._hotkey_toggle)
+        # Start hotkey listener — F1=dictation, F2=note
+        start_hotkey_listener(self._hotkey_dictation, self._hotkey_note)
 
         # Poll for UI updates from background threads
         self._poll_timer = rumps.Timer(self._poll_ui_queue, 0.2)
@@ -1191,22 +1305,32 @@ class VoiceNotesApp(rumps.App):
 
     # --- Hotkey ---
 
-    def _hotkey_toggle(self):
-        self._schedule_ui(self._handle_hotkey)
+    def _hotkey_dictation(self):
+        self._schedule_ui(lambda: self._handle_hotkey(force_mode="dictation"))
 
-    def _handle_hotkey(self):
-        debug(f"[voice-notes] Hotkey pressed, state={self.state.value}")
+    def _hotkey_note(self):
+        self._schedule_ui(lambda: self._handle_hotkey(force_mode="note"))
+
+    def _handle_hotkey(self, force_mode=None):
+        debug(f"[voice-notes] Hotkey pressed, state={self.state.value}, force_mode={force_mode}")
         overlay = self._ensure_overlay()
 
         if self.state == AppState.IDLE:
-            # Capture frontmost app BEFORE the overlay steals focus,
-            # so dictation mode can restore focus and type there.
+            # Capture frontmost app BEFORE the overlay steals focus.
             from AppKit import NSWorkspace
-            self._previous_app = NSWorkspace.sharedWorkspace().frontmostApplication()
-            debug(f"[voice-notes] Previous app: {self._previous_app.bundleIdentifier() if self._previous_app else 'none'}")
+            front = NSWorkspace.sharedWorkspace().frontmostApplication()
+            self._previous_app = front
+            debug(f"[voice-notes] Previous app: {front.bundleIdentifier() if front else 'none'}")
+
+            # Switch to the mode for this hotkey
+            if force_mode and overlay.mode != force_mode:
+                overlay.mode = force_mode
+                overlay._eval_js(f"setModeFromPython('{force_mode}')")
+
             if not overlay.is_visible():
                 overlay.show()
             self.start_recording()
+
         elif self.state == AppState.RECORDING:
             self.stop_recording()
         else:
@@ -1241,7 +1365,37 @@ class VoiceNotesApp(rumps.App):
 
     def start_recording(self):
         self.state = AppState.RECORDING
-        self.recorder.start()
+        try:
+            self.recorder.start()
+        except Exception as exc:
+            err_str = str(exc)
+            # PaErrorCode -9986 = paInternalError — usually a stale PortAudio
+            # device list after Core Audio hiccups. Re-initialise PortAudio
+            # in-process and retry once. (sudo killall coreaudiod can't work
+            # from a GUI app — no terminal to prompt for the password.)
+            if "-9986" in err_str:
+                debug("[voice-notes] PortAudio internal error — reinitialising and retrying…")
+                try:
+                    sd._terminate()
+                    time.sleep(0.5)
+                    sd._initialize()
+                    self.recorder.start()
+                    debug("[voice-notes] Retry after PortAudio reset succeeded")
+                except Exception as retry_exc:
+                    self.state = AppState.IDLE
+                    debug(f"[voice-notes] Retry failed: {retry_exc}")
+                    overlay = self._ensure_overlay()
+                    overlay.push_error(
+                        "Microphone Error",
+                        "Core Audio is in a bad state. Run  sudo killall coreaudiod  in Terminal, then try again."
+                    )
+                    return
+            else:
+                self.state = AppState.IDLE
+                debug(f"[voice-notes] start_recording error: {exc}")
+                overlay = self._ensure_overlay()
+                overlay.push_error("Microphone Error", err_str)
+                return
         self._set_icon(ICON_RECORDING)
 
         overlay = self._ensure_overlay()
@@ -1250,9 +1404,42 @@ class VoiceNotesApp(rumps.App):
             NSApp.activateIgnoringOtherApps_(True)
             overlay.panel.makeKeyAndOrderFront_(None)
 
+        # After RECORD_REMINDER_MINUTES, pop the overlay and show a "still recording?" banner
+        reminder_secs = RECORD_REMINDER_MINUTES * 60
+        def _remind(_timer):
+            if self.state != AppState.RECORDING:
+                return
+            # rumps.Timer fires once immediately on start — ignore that one.
+            elapsed = time.time() - (self.recorder.start_time or 0)
+            if elapsed < reminder_secs - 5:
+                return
+            mins = RECORD_REMINDER_MINUTES
+            debug(f"[voice-notes] Long-recording reminder at {mins} min")
+            ov = self._ensure_overlay()
+            if not ov.is_visible():
+                ov.show()
+            NSApp.activateIgnoringOtherApps_(True)
+            ov.panel.makeKeyAndOrderFront_(None)
+            ov._eval_js(f"showLongRecordingReminder({mins})")
+        self._auto_stop_timer = rumps.Timer(_remind, reminder_secs)
+        self._auto_stop_timer.start()
+
         debug("[voice-notes] Recording started")
 
     def stop_recording(self):
+        # Cancel reminder timer and hide banner if still visible
+        timer = getattr(self, '_auto_stop_timer', None)
+        if timer:
+            try:
+                timer.stop()
+            except Exception:
+                pass
+            self._auto_stop_timer = None
+        try:
+            self._ensure_overlay()._eval_js("hideLongRecordingReminder()")
+        except Exception:
+            pass
+
         wav_path, duration = self.recorder.stop()
         self._set_icon(ICON_PROCESSING)
         self.state = AppState.TRANSCRIBING
@@ -1266,6 +1453,20 @@ class VoiceNotesApp(rumps.App):
             notify("Voice Notes", "Too short", "Recording was too short to process.")
             return
 
+        if duration > MAX_TRANSCRIBE_SECONDS:
+            self.state = AppState.IDLE
+            self._set_icon(ICON_IDLE)
+            overlay.set_idle()
+            mins = int(duration // 60)
+            limit = MAX_TRANSCRIBE_SECONDS // 60
+            overlay.push_error(
+                "Recording Too Long",
+                f"Recording was {mins} min — max is {limit} min. "
+                "Use F1/F2 to stop sooner, or increase max_transcribe_seconds in config.json."
+            )
+            debug(f"[voice-notes] Refusing to transcribe {duration}s recording (limit={MAX_TRANSCRIBE_SECONDS}s)")
+            return
+
         self._wav_path = wav_path
         self._duration = duration
         overlay.wav_path = wav_path
@@ -1274,9 +1475,34 @@ class VoiceNotesApp(rumps.App):
 
         debug(f"[voice-notes] Stopped, transcribing {wav_path} ({duration}s)...")
 
+        # Estimate timeout: 5× realtime, minimum 60s, max 600s.
+        # First transcription also loads the Whisper model, which can take
+        # a couple of minutes on its own — give it generous headroom.
+        transcribe_timeout = max(60, min(600, int(duration * 5)))
+        if not _whisper_loaded:
+            transcribe_timeout += 300
+
         def do_transcribe():
+            import concurrent.futures
+            debug(f"[voice-notes] Transcribing (timeout={transcribe_timeout}s)…")
             try:
-                transcript = transcribe(wav_path)
+                # No `with` block: context-manager exit calls shutdown(wait=True),
+                # which would block on the still-running transcribe and defeat
+                # the timeout. shutdown(wait=False) abandons the worker instead.
+                ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                future = ex.submit(transcribe, wav_path)
+                try:
+                    transcript = future.result(timeout=transcribe_timeout)
+                except concurrent.futures.TimeoutError:
+                    ex.shutdown(wait=False)
+                    debug(f"[voice-notes] Transcription timed out after {transcribe_timeout}s")
+                    self._schedule_ui(lambda: self._transcription_error(
+                        f"Transcription timed out ({transcribe_timeout}s). "
+                        "Try a shorter recording."
+                    ))
+                    return
+                ex.shutdown(wait=False)
+
                 debug(f"[voice-notes] Transcript: {transcript[:200] if transcript else '(empty)'}")
 
                 if not transcript:
@@ -1330,21 +1556,53 @@ class VoiceNotesApp(rumps.App):
         debug("[voice-notes] Dictation: typing at cursor")
         prev = self._previous_app
         self._previous_app = None
+        # Dictation never plays back the audio — clean up the temp WAV now.
+        if self._wav_path:
+            try:
+                os.unlink(self._wav_path)
+            except OSError:
+                pass
+            self._wav_path = None
         threading.Thread(
             target=lambda: self._type_at_cursor(transcript, prev),
             daemon=True,
         ).start()
 
     def _type_at_cursor(self, text, prev_app):
-        """Restore focus to prev_app and type text at the cursor position."""
+        """Copy text to clipboard, restore focus to prev_app, then paste with Cmd+V.
+
+        Uses pynput for the keystroke — covered by the Accessibility grant on
+        this process's python binary. (osascript/System Events needs a separate
+        Automation permission that launchd-spawned processes don't get.)
+        """
         try:
+            # 1. Put text on clipboard
+            copy_to_clipboard(text)
+
+            # 2. Restore focus to the app that was frontmost before the overlay
             if prev_app:
                 from AppKit import NSApplicationActivateIgnoringOtherApps
                 prev_app.activateWithOptions_(NSApplicationActivateIgnoringOtherApps)
-                time.sleep(0.25)  # wait for focus to transfer
-            from pynput.keyboard import Controller
-            Controller().type(text)
-            debug(f"[voice-notes] Typed {len(text)} chars at cursor")
+                time.sleep(0.25)  # let the window manager transfer focus
+            else:
+                time.sleep(0.15)
+
+            # 3. Paste via System Events. Under launchd, /usr/bin/osascript
+            # itself must be granted Accessibility (error 1002 otherwise).
+            # Do NOT use pynput Controller here — posting CGEvents from a
+            # background thread crashes the whole process.
+            result = subprocess.run(
+                ['osascript', '-e',
+                 'tell application "System Events" to keystroke "v" using command down'],
+                capture_output=True, text=True,
+            )
+            if result.returncode != 0:
+                debug(f"[voice-notes] osascript paste error: {result.stderr.strip()!r}")
+                notify("Voice Notes", "Paste blocked",
+                       "Transcript is on the clipboard — press Cmd+V. "
+                       "To fix: add /usr/bin/osascript to Accessibility.")
+            else:
+                debug(f"[voice-notes] Pasted {len(text)} chars at cursor")
         except Exception as exc:
             debug(f"[voice-notes] _type_at_cursor error: {exc!r}")
 
@@ -1595,8 +1853,56 @@ def _acquire_single_instance_lock():
     return fh
 
 
+def _sweep_stale_wavs(max_age_hours=24):
+    """Delete leftover voice_note_*.wav temp files older than max_age_hours."""
+    try:
+        cutoff = time.time() - max_age_hours * 3600
+        for p in Path(tempfile.gettempdir()).glob("voice_note_*.wav"):
+            try:
+                if p.stat().st_mtime < cutoff:
+                    p.unlink()
+                    debug(f"[voice-notes] Swept stale temp wav: {p.name}")
+            except OSError:
+                pass
+    except Exception as exc:
+        debug(f"[voice-notes] Temp sweep error: {exc}")
+
+
+def _request_microphone_permission():
+    """Trigger the macOS microphone permission dialog if not yet granted.
+
+    On modern macOS there is no + button in Settings → Microphone — apps
+    only appear there after they call AVCaptureDevice.requestAccessForMediaType.
+    We call that here at startup so the user sees the prompt once and the
+    entry appears in System Settings so they can re-enable it later.
+    """
+    try:
+        from AVFoundation import AVCaptureDevice, AVMediaTypeAudio
+        status = AVCaptureDevice.authorizationStatusForMediaType_(AVMediaTypeAudio)
+        # 0 = not determined → request; 3 = authorized → nothing to do
+        # 1 = restricted, 2 = denied → log but can't prompt again
+        debug(f"[voice-notes] Microphone auth status: {status}")
+        if status == 0:
+            debug("[voice-notes] Requesting microphone permission…")
+            import threading
+            done = threading.Event()
+            def handler(granted):
+                debug(f"[voice-notes] Microphone permission granted={granted}")
+                done.set()
+            AVCaptureDevice.requestAccessForMediaType_completionHandler_(
+                AVMediaTypeAudio, handler
+            )
+            done.wait(timeout=30)
+        elif status == 2:
+            debug("[voice-notes] Microphone permission DENIED — user must enable in System Settings")
+    except Exception as exc:
+        debug(f"[voice-notes] Could not request mic permission: {exc}")
+
+
 if __name__ == "__main__":
     debug("=== Voice Notes starting ===")
+    _sweep_stale_wavs()
+    _request_microphone_permission()
     _lock = _acquire_single_instance_lock()  # noqa: F841 (held for process lifetime)
 
     # SIGUSR1 from a second-launch attempt = "bring the overlay to front"
