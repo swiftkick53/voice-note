@@ -115,14 +115,20 @@ VAULT = Path(os.path.expanduser(CONFIG.get("vault_path", "~/Documents/Claude Bra
 NOTES_DIR = VAULT / CONFIG.get("notes_folder", "08 Summaries/Voice Notes")
 DAILY_DIR = VAULT / "02 Daily"
 WHISPER_MODEL = CONFIG.get("whisper_model", "mlx-community/whisper-large-v3-turbo")
+# engine: "whisper" (mlx-whisper) or "parakeet" (parakeet-mlx — ~5-10x faster,
+# hallucination-resistant, English/EU languages only). Whisper is the fallback
+# if the parakeet path fails for any reason.
+ENGINE = CONFIG.get("engine", "whisper").lower()
+PARAKEET_MODEL = CONFIG.get("parakeet_model", "mlx-community/parakeet-tdt-0.6b-v2")
+ACTIVE_MODEL = PARAKEET_MODEL if ENGINE == "parakeet" else WHISPER_MODEL
 
-# Force HuggingFace offline mode when the model is already in the local cache.
-# Recent huggingface_hub versions hang (sometimes 10+ minutes, 0% CPU) on
-# their online repo check before falling back to cache; offline mode loads
+# Force HuggingFace offline mode when the active model is already in the local
+# cache. Recent huggingface_hub versions hang (sometimes 10+ minutes, 0% CPU)
+# on their online repo check before falling back to cache; offline mode loads
 # the cached model in seconds. Left online only when the model still needs
 # its first download.
 _hf_model_cache = Path(os.path.expanduser("~/.cache/huggingface/hub")) / (
-    "models--" + WHISPER_MODEL.replace("/", "--")
+    "models--" + ACTIVE_MODEL.replace("/", "--")
 )
 if _hf_model_cache.exists():
     os.environ.setdefault("HF_HUB_OFFLINE", "1")
@@ -135,6 +141,9 @@ INPUT_DEVICE = CONFIG.get("input_device", None)
 RECORD_REMINDER_MINUTES = CONFIG.get("record_reminder_minutes", 30)
 # Max duration to attempt transcription — refuse anything longer (default 2 hours).
 MAX_TRANSCRIBE_SECONDS = CONFIG.get("max_transcribe_seconds", 7200)
+# Dictation shows the transcript for this long (with Esc-to-cancel) before
+# pasting at the cursor. 0 = paste immediately with no preview.
+PASTE_PREVIEW_SECONDS = CONFIG.get("paste_preview_seconds", 1.5)
 NOTES_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -340,29 +349,61 @@ _whisper_loaded = False
 _whisper_lock = threading.Lock()
 
 
-def transcribe(wav_path):
-    global _whisper_loaded
-    import mlx_whisper
+_parakeet_model = None
 
-    if not _whisper_loaded:
-        notify("Voice Notes", "Loading Whisper model...", "First transcription may take a moment.")
-        _whisper_loaded = True
 
+def _load_wav_mono_16k(wav_path):
+    """Read a WAV as mono float32 at 16 kHz (nearest-neighbor resample)."""
     import numpy as np
     data, sr = sf.read(wav_path, dtype="float32")
     if sr != 16000:
-        from fractions import Fraction
-        ratio = Fraction(16000, sr)
-        n_samples = int(len(data) * ratio)
+        n_samples = int(len(data) * 16000 / sr)
         indices = np.arange(n_samples) * sr / 16000
         indices = np.clip(indices.astype(int), 0, len(data) - 1)
         data = data[indices]
     if data.ndim > 1:
         data = data.mean(axis=1)
+    return data
+
+
+def _transcribe_whisper(data):
+    import mlx_whisper
+    result = mlx_whisper.transcribe(data, path_or_hf_repo=WHISPER_MODEL, language="en")
+    return result.get("text", "").strip()
+
+
+def _transcribe_parakeet(data):
+    """Transcribe with parakeet-mlx via the array API (no ffmpeg needed)."""
+    global _parakeet_model
+    import mlx.core as mx
+    from parakeet_mlx import from_pretrained
+    from parakeet_mlx.audio import get_logmel
+
+    if _parakeet_model is None:
+        _parakeet_model = from_pretrained(PARAKEET_MODEL)
+    cfg = getattr(_parakeet_model, "preprocessor_config", None) or _parakeet_model.preprocess_config
+    mel = get_logmel(mx.array(data), cfg)
+    results = _parakeet_model.generate(mel)
+    return " ".join(r.text.strip() for r in results).strip()
+
+
+def transcribe(wav_path):
+    global _whisper_loaded
+
+    if not _whisper_loaded:
+        notify("Voice Notes", f"Loading {ENGINE} model...",
+               "First transcription may take a moment.")
+        _whisper_loaded = True
+
+    data = _load_wav_mono_16k(wav_path)
 
     with _whisper_lock:
-        result = mlx_whisper.transcribe(data, path_or_hf_repo=WHISPER_MODEL, language="en")
-    return result.get("text", "").strip()
+        if ENGINE == "parakeet":
+            try:
+                return _transcribe_parakeet(data)
+            except Exception as exc:
+                debug(f"[voice-notes] Parakeet failed, falling back to Whisper: {exc!r}")
+        return _transcribe_whisper(data)
 
 
 # NOTE: do not add a startup model pre-warm thread. Importing/loading MLX
@@ -755,13 +796,14 @@ class ClickablePanel(NSPanel):
     full drag loop including snap-to-edge and multi-monitor handling.
     Clicks outside that zone fall through to normal event dispatch."""
 
-    # Header-drag geometry. Coordinates are in window/content space (origin
-    # bottom-left on macOS). The Soft Matter header has a dot+title on the
-    # left, then a mode-toggle and win-controls on the right. We make only
-    # the title/subtitle strip draggable (roughly x 60–200) so the dot,
-    # mode buttons, and window controls keep receiving clicks.
+    # Drag-handle rect in CSS coordinates (top-left origin), reported live by
+    # the overlay JS whenever the visible screen changes (see reportDragZone
+    # in overlay.html). Only clicks inside this rect start a window drag, so
+    # the drag zone always matches the actual title element and can never
+    # collide with buttons. Fallback legacy strip is used until the first
+    # report arrives.
     HEADER_DRAG_HEIGHT = 52
-    HEADER_LEFT_INSET  = 60
+    HEADER_LEFT_INSET  = 110
     HEADER_RIGHT_INSET = 200
 
     def canBecomeKeyWindow(self):
@@ -770,17 +812,25 @@ class ClickablePanel(NSPanel):
     def canBecomeMainWindow(self):
         return False
 
+    def _in_drag_zone(self, point):
+        """point is in window coords (bottom-left origin)."""
+        frame_size = self.frame().size
+        rect = getattr(self, "_drag_rect_css", None)
+        if rect:
+            css_x = point.x
+            css_y = frame_size.height - point.y   # convert to top-left origin
+            return (rect["x"] <= css_x <= rect["x"] + rect["w"] and
+                    rect["y"] <= css_y <= rect["y"] + rect["h"])
+        # Legacy fallback before JS reports a rect
+        in_header = point.y >= (frame_size.height - self.HEADER_DRAG_HEIGHT)
+        in_mid = (self.HEADER_LEFT_INSET < point.x <
+                  (frame_size.width - self.HEADER_RIGHT_INSET))
+        return in_header and in_mid
+
     def sendEvent_(self, event):
         if event.type() == NSEventTypeLeftMouseDown:
             try:
-                point = event.locationInWindow()   # window coords, bottom-left origin
-                frame_size = self.frame().size
-                in_header = point.y >= (frame_size.height - self.HEADER_DRAG_HEIGHT)
-                in_mid = (
-                    self.HEADER_LEFT_INSET < point.x <
-                    (frame_size.width - self.HEADER_RIGHT_INSET)
-                )
-                if in_header and in_mid:
+                if self._in_drag_zone(event.locationInWindow()):
                     # performWindowDragWithEvent: runs the full drag loop;
                     # it returns immediately after starting.
                     self.performWindowDragWithEvent_(event)
@@ -921,8 +971,9 @@ class OverlayPanel:
         # during the first paint and behind any resize overscroll.
         self.panel.setBackgroundColor_(NSColor.windowBackgroundColor())
         self.panel.setReleasedWhenClosed_(False)
-        # Allow the user to resize the overlay; clamp to a usable minimum.
-        self.panel.setMinSize_((360, 420))
+        # The Molten design is a fixed 420x540 grid — don't let resizing
+        # shrink below it (compact pill mode temporarily lowers this).
+        self.panel.setMinSize_((self.WIDTH, self.HEIGHT))
 
         # Hide native traffic light buttons
         self.panel.standardWindowButton_(0).setHidden_(True)
@@ -1030,6 +1081,23 @@ class OverlayPanel:
                 notify("Voice Notes", "Copied", "Error details copied.")
         elif action == "retry":
             self.app.retry_from_overlay()
+        elif action == "drag_zone":
+            # JS-reported drag-handle rect (CSS px, top-left origin)
+            try:
+                self.panel._drag_rect_css = {
+                    "x": float(body.get("x", 0)), "y": float(body.get("y", 0)),
+                    "w": float(body.get("w", 0)), "h": float(body.get("h", 0)),
+                }
+            except (TypeError, ValueError):
+                pass
+        elif action == "cancel_paste":
+            self.app.cancel_paste_from_overlay()
+        elif action == "open_settings":
+            # Jump straight to the Microphone privacy pane
+            subprocess.run(
+                ["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"],
+                check=False,
+            )
 
     def _eval_js(self, script):
         """Evaluate JavaScript in the webview."""
@@ -1084,7 +1152,7 @@ class OverlayPanel:
 
         # Real telemetry
         self._eval_js(f"setSampleRate({SAMPLE_RATE})")
-        model_escaped = self._js_escape(WHISPER_MODEL)
+        model_escaped = self._js_escape(ACTIVE_MODEL)
         self._eval_js(f"setEngineModel('{model_escaped}')")
         self._eval_js(f"setVersion('{__version__}')")
 
@@ -1108,9 +1176,44 @@ class OverlayPanel:
         self._eval_js(f"setPlayingState({'true' if playing else 'false'})")
 
     def push_error(self, title, message):
+        # Errors always show the full panel, never the compact pill
+        self.set_compact(False)
         title_e = self._js_escape(title)
         msg_e = self._js_escape(message)
         self._eval_js(f"showError('{title_e}', '{msg_e}')")
+
+    # Compact "dictation pill" geometry
+    COMPACT_WIDTH = 360
+    COMPACT_HEIGHT = 76
+
+    def set_compact(self, compact):
+        """Toggle between the full 420x540 panel and a slim pill near the
+        menu bar (used for dictation so it doesn't take over the screen)."""
+        if getattr(self, "_compact", False) == compact:
+            return
+        self._compact = compact
+        screen = NSScreen.mainScreen().frame()
+        if compact:
+            self._saved_frame = self.panel.frame()
+            self.panel.setMinSize_((self.COMPACT_WIDTH, self.COMPACT_HEIGHT))
+            x = (screen.size.width - self.COMPACT_WIDTH) / 2
+            y = screen.size.height - self.COMPACT_HEIGHT - 44
+            self.panel.setFrame_display_animate_(
+                ((x, y), (self.COMPACT_WIDTH, self.COMPACT_HEIGHT)), True, True,
+            )
+        else:
+            self.panel.setMinSize_((self.WIDTH, self.HEIGHT))
+            frame = getattr(self, "_saved_frame", None)
+            if frame is not None:
+                self.panel.setFrame_display_animate_(frame, True, True)
+            else:
+                x = (screen.size.width - self.WIDTH) / 2
+                y = screen.size.height - self.HEIGHT - 60
+                self.panel.setFrame_display_animate_(
+                    ((x, y), (self.WIDTH, self.HEIGHT)), True, True,
+                )
+        self._eval_js(f"setCompactMode({'true' if compact else 'false'})")
+        debug(f"[voice-notes] Compact mode: {compact}")
 
     def hide(self):
         self.panel.orderOut_(None)
@@ -1327,6 +1430,9 @@ class VoiceNotesApp(rumps.App):
                 overlay.mode = force_mode
                 overlay._eval_js(f"setModeFromPython('{force_mode}')")
 
+            # Dictation records in the slim pill; note mode gets the full panel
+            overlay.set_compact(overlay.mode == "dictation")
+
             if not overlay.is_visible():
                 overlay.show()
             self.start_recording()
@@ -1472,6 +1578,11 @@ class VoiceNotesApp(rumps.App):
         overlay.wav_path = wav_path
         overlay.duration = duration
         overlay.set_transcribing()
+        # First transcription of this app launch also loads the model —
+        # show that explicitly so it doesn't read as "stuck".
+        overlay._eval_js(
+            f"setTranscribingPhase('{'transcribing' if _whisper_loaded else 'loading'}')"
+        )
 
         debug(f"[voice-notes] Stopped, transcribing {wav_path} ({duration}s)...")
 
@@ -1548,25 +1659,53 @@ class VoiceNotesApp(rumps.App):
         debug("[voice-notes] Showing post-recording UI")
 
     def _show_dictation_result(self, transcript):
-        """In dictation mode: hide overlay, restore focus to previous app, type transcript."""
-        self.state = AppState.IDLE
+        """In dictation mode: preview the transcript briefly (Esc cancels),
+        then hide the overlay, restore focus, and paste at the cursor."""
         self._set_icon(ICON_IDLE)
         overlay = self._ensure_overlay()
-        overlay.hide()
-        debug("[voice-notes] Dictation: typing at cursor")
         prev = self._previous_app
         self._previous_app = None
-        # Dictation never plays back the audio — clean up the temp WAV now.
-        if self._wav_path:
-            try:
-                os.unlink(self._wav_path)
-            except OSError:
-                pass
+        self._paste_cancelled = False
+
+        def do_paste():
+            if self._paste_cancelled:
+                return
+            self.state = AppState.IDLE
+            overlay.hide()
+            overlay.set_compact(False)   # restore full panel for next open
+            debug("[voice-notes] Dictation: typing at cursor")
+            wav = self._wav_path
             self._wav_path = None
-        threading.Thread(
-            target=lambda: self._type_at_cursor(transcript, prev),
-            daemon=True,
+
+            def paste_and_cleanup():
+                self._type_at_cursor(transcript, prev)
+                if wav:
+                    try:
+                        os.unlink(wav)
+                    except OSError:
+                        pass
+
+            threading.Thread(target=paste_and_cleanup, daemon=True).start()
+
+        if PASTE_PREVIEW_SECONDS <= 0:
+            do_paste()
+            return
+
+        # Show the transcript with a countdown bar; Esc / Cancel aborts the paste
+        self.state = AppState.POST_RECORDING
+        overlay.set_post_dictation(transcript)
+        overlay._eval_js(f"startPasteCountdown({PASTE_PREVIEW_SECONDS})")
+        threading.Timer(
+            PASTE_PREVIEW_SECONDS, lambda: self._schedule_ui(do_paste)
         ).start()
+
+    def cancel_paste_from_overlay(self):
+        """User hit Esc/Cancel during the paste countdown — keep the transcript
+        on screen (and on the clipboard) but don't type it anywhere."""
+        debug("[voice-notes] Paste cancelled by user")
+        self._paste_cancelled = True
+        # Expand from the pill to the full panel so the transcript is reviewable
+        self._ensure_overlay().set_compact(False)
 
     def _type_at_cursor(self, text, prev_app):
         """Copy text to clipboard, restore focus to prev_app, then paste with Cmd+V.
@@ -1697,6 +1836,11 @@ class VoiceNotesApp(rumps.App):
                     overlay.wav_path = None
                     overlay.suggested_title_text = None
                     overlay.set_idle()
+                    # In-panel toast (click opens the note); notification as backup
+                    title_e = overlay._js_escape(note_title)
+                    overlay._eval_js(
+                        f"showToast('✓ Saved — {title_e}', '{title_e}.md')"
+                    )
                     notify("Voice Notes", "Note saved!", note_title)
 
                 self._schedule_ui(on_success)
@@ -1738,6 +1882,7 @@ class VoiceNotesApp(rumps.App):
     def done_from_overlay(self):
         """Handle done message from the webview (dictation mode)."""
         debug("[voice-notes] Done (dictation)")
+        self._ensure_overlay().set_compact(False)
         if self._wav_path:
             try:
                 os.unlink(self._wav_path)
@@ -1798,6 +1943,8 @@ class VoiceNotesApp(rumps.App):
             "copy_to_clipboard": CONFIG.get("copy_to_clipboard", False),
             "hotkey": CONFIG.get("hotkey", "f1"),
             "whisper_model": WHISPER_MODEL,
+            "engine": ENGINE,
+            "active_model": ACTIVE_MODEL,
             "sample_rate": SAMPLE_RATE,
             "vault_path": str(VAULT),
             "notes_folder": CONFIG.get("notes_folder", ""),
@@ -1807,12 +1954,13 @@ class VoiceNotesApp(rumps.App):
             self.overlay.push_settings(settings)
 
     def save_settings_from_overlay(self, body):
-        for key in ("default_mode", "default_action", "copy_to_clipboard", "hotkey"):
+        """Apply-on-change: persist silently (the overlay shows its own toast).
+        No echo back to the webview — it already reflects the new values, and
+        an echo would fight rapid successive changes."""
+        for key in ("default_mode", "default_action", "copy_to_clipboard"):
             if key in body:
                 CONFIG[key] = body[key]
         save_config(CONFIG)
-        notify("Voice Notes", "Settings saved", "Hotkey changes need a restart.")
-        self.send_settings()
 
     # --- Retry ---
 
