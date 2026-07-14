@@ -1092,6 +1092,8 @@ class OverlayPanel:
                 pass
         elif action == "cancel_paste":
             self.app.cancel_paste_from_overlay()
+        elif action == "cancel_recording":
+            self.app.cancel_recording_from_overlay()
         elif action == "open_settings":
             # Jump straight to the Microphone privacy pane
             subprocess.run(
@@ -1531,6 +1533,33 @@ class VoiceNotesApp(rumps.App):
         self._auto_stop_timer.start()
 
         debug("[voice-notes] Recording started")
+
+    def cancel_recording_from_overlay(self):
+        """Stop the mic and throw the audio away — no transcription."""
+        if self.state != AppState.RECORDING:
+            return
+        debug("[voice-notes] Recording cancelled")
+        timer = getattr(self, '_auto_stop_timer', None)
+        if timer:
+            try:
+                timer.stop()
+            except Exception:
+                pass
+            self._auto_stop_timer = None
+        wav_path, _duration = self.recorder.stop()
+        if wav_path:
+            try:
+                os.unlink(wav_path)
+            except OSError:
+                pass
+        self.state = AppState.IDLE
+        self._set_icon(ICON_IDLE)
+        overlay = self._ensure_overlay()
+        overlay.set_idle()
+        # A cancelled dictation pill should disappear entirely
+        if getattr(overlay, "_compact", False):
+            overlay.hide()
+            overlay.set_compact(False)
 
     def stop_recording(self):
         # Cancel reminder timer and hide banner if still visible

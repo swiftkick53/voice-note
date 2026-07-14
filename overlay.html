@@ -115,6 +115,15 @@ body {
   border: 1px solid oklch(1 0 0 / 0.18); border-radius: 6px;
 }
 
+.win-x {
+  flex: none; width: 22px; height: 22px; border-radius: 50%;
+  border: none; background: transparent; color: var(--ink-3);
+  font: 400 14px var(--ui); cursor: pointer; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.win-x:hover { background: oklch(1 0 0 / 0.1); color: var(--ink-0); }
+
 .well {
   background: var(--card); border: 1px solid var(--card-border);
   border-radius: 14px; padding: 14px 16px;
@@ -357,6 +366,7 @@ body.compact-mode #compact-strip {
       <button data-mode="note" onclick="setMode('note')" class="active">Note</button>
       <button data-mode="dictation" onclick="setMode('dictation')">Dictation</button>
     </div>
+    <button class="win-x" onclick="send('close')" title="Hide (Esc)">×</button>
   </div>
   <div class="stage" style="gap:26px">
     <div style="font:400 26px var(--display);color:oklch(0.92 0.02 75)">What's on your mind?</div>
@@ -407,7 +417,7 @@ body.compact-mode #compact-strip {
     <button class="mini-btn" onclick="hideLongRecordingReminder()">Continue</button>
   </div>
   <div class="dock">
-    <span class="text-link" onclick="send('close')">Cancel <span style="font-family:var(--mono);font-size:10px;opacity:0.7">esc</span></span>
+    <span class="text-link" onclick="send('cancel_recording')">Cancel <span style="font-family:var(--mono);font-size:10px;opacity:0.7">esc</span></span>
   </div>
 </div>
 
@@ -443,6 +453,7 @@ body.compact-mode #compact-strip {
     </div>
     <div class="spacer"></div>
     <div class="hd-meta" id="note-meta">—</div>
+    <button class="win-x" onclick="send('close')" title="Hide">×</button>
   </div>
   <div class="stage" style="align-items:stretch;justify-content:flex-start;gap:12px;padding:4px 20px 12px;overflow:hidden">
     <div style="display:flex;align-items:baseline;gap:6px;flex:none">
@@ -479,6 +490,7 @@ body.compact-mode #compact-strip {
     </div>
     <div class="spacer"></div>
     <div class="hd-meta">copied to clipboard</div>
+    <button class="win-x" onclick="send('done')" title="Done">×</button>
   </div>
   <div class="stage" style="gap:18px;padding:0 24px;align-items:stretch;justify-content:center">
     <div class="well" id="transcript-preview" style="max-height:280px;overflow-y:auto"></div>
@@ -524,6 +536,7 @@ body.compact-mode #compact-strip {
     <button class="pill" style="padding:6px 12px" onclick="navigate('audio')">← Capture</button>
     <div class="spacer drag-spot" style="height:52px"></div>
     <div class="hd-meta" id="library-count"></div>
+    <button class="win-x" onclick="send('close')" title="Hide">×</button>
   </div>
   <div class="search-field">
     <span style="color:var(--ink-3)">⌕</span>
@@ -539,6 +552,7 @@ body.compact-mode #compact-strip {
     <button class="pill" style="padding:6px 12px" onclick="navigate('audio')">← Capture</button>
     <div class="spacer drag-spot" style="height:52px"></div>
     <div style="font:400 19px var(--display)">System</div>
+    <button class="win-x" onclick="send('close')" title="Hide">×</button>
   </div>
   <div class="set-scroll">
     <div class="set-card">
@@ -589,6 +603,7 @@ body.compact-mode #compact-strip {
     </div>
     <div class="spacer"></div>
     <div class="hd-meta" style="color:oklch(0.65 0.05 15)" id="error-tag">error</div>
+    <button class="win-x" onclick="send('discard')" title="Dismiss">×</button>
   </div>
   <div class="stage" style="gap:22px;padding:0 36px;text-align:center">
     <div class="blob" style="width:130px;height:130px;animation-duration:10s;background:radial-gradient(circle at 32% 28%, oklch(0.72 0.13 20), oklch(0.52 0.14 15) 60%, oklch(0.38 0.11 12));box-shadow:inset 0 -12px 26px oklch(0.25 0.08 12/0.6);display:flex;align-items:center;justify-content:center">
@@ -1249,6 +1264,7 @@ document.addEventListener('keydown', function(e) {
     else if (currentState === 'post_dictation' && _pasteCountdownActive) cancelPaste();
     else if (currentState === 'post_dictation') send('done');
     else if (currentState === 'error') send('discard');
+    else if (currentState === 'recording') send('cancel_recording');
     else send('close');
     return;
   }
