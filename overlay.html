@@ -408,7 +408,7 @@ body.compact-mode #compact-strip {
         </div>
       </div>
     </div>
-    <div style="font:400 13px var(--ui);color:oklch(0.68 0.06 25)">tap to stop · pull to fidget</div>
+    <div id="rec-hint" style="font:400 13px var(--ui);color:oklch(0.68 0.06 25);max-width:360px;padding:0 20px;text-align:center;white-space:nowrap;overflow:hidden">tap to stop · pull to fidget</div>
   </div>
   <div class="bar-banner" id="long-record-banner">
     <span class="lbl">⏱ Recording for <span id="long-record-mins">30</span> min — still going?</span>
@@ -717,8 +717,13 @@ function setState(state) {
   currentPage = 'audio';
   showScreen(state);
 
-  if (state === 'recording') startTimer();
-  else { stopTimer(); }
+  if (state === 'recording') {
+    startTimer();
+    // reset live-caption line for the new take
+    var hint = document.getElementById('rec-hint');
+    hint.textContent = 'tap to stop · pull to fidget';
+    hint.style.color = 'oklch(0.68 0.06 25)';
+  } else { stopTimer(); }
 
   if (state === 'transcribing' || state === 'saving') startElapsed(state);
   else stopElapsed();
@@ -1022,6 +1027,21 @@ function endPasteCountdown() {
   document.getElementById('paste-countdown').classList.remove('on');
 }
 function cancelPaste() { endPasteCountdown(); send('cancel_paste'); }
+
+// ============ LIVE CAPTIONS (dictation) ============
+function setLiveTranscript(text) {
+  if (currentState !== 'recording' || !text) return;
+  // Show the tail so the newest words are always visible
+  var tail = text.length > 44 ? '…' + text.slice(-44) : text;
+  if (_compactMode) {
+    document.getElementById('compact-sub').textContent = tail;
+  }
+  var hint = document.getElementById('rec-hint');
+  if (hint) {
+    hint.textContent = text.length > 52 ? '…' + text.slice(-52) : text;
+    hint.style.color = 'oklch(0.88 0.03 30)';
+  }
+}
 
 // ============ COMPACT DICTATION PILL ============
 var _compactMode = false;

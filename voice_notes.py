@@ -227,11 +227,19 @@ class Recorder:
         self.recording = False
         self.start_time = None
         self.last_level = 0.0  # 0..1, RMS-derived for visualization
+        self.tap = None        # optional callable(chunk) for live captioning
 
     def _callback(self, indata, frames, time_info, status):
         ch = min(INPUT_CHANNEL - 1, indata.shape[1] - 1)
         chunk = indata[:, ch:ch + 1].copy()
         self.audio_queue.put(chunk)
+        # Optional tap for live captioning during dictation
+        tap = self.tap
+        if tap:
+            try:
+                tap(chunk)
+            except Exception:
+                pass
         # Compute simple RMS for level meter
         try:
             import numpy as np
@@ -411,6 +419,71 @@ def transcribe(wav_path):
 # never loads), and any lock around it then blocks real transcriptions
 # behind the wedged thread. Lazy-load on first transcription instead —
 # the first-run timeout already includes +300s headroom for the load.
+
+
+class LiveCaption:
+    """Live captions during dictation via parakeet-mlx's streaming API.
+
+    The Recorder's audio callback feeds float32 mono chunks through feed();
+    a worker thread batches them to ~1s (streaming runs ~5x realtime at that
+    batch size; smaller batches waste compute on context reprocessing) and
+    pushes partial text through on_text. Runs entirely in-process on MLX —
+    no AVAudioEngine, so no Core Audio conflict with PortAudio.
+    """
+
+    def __init__(self, on_text):
+        self._on_text = on_text
+        self._q = queue.Queue()
+        self._stop = False
+        self._thread = None
+
+    def start(self):
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def feed(self, chunk):
+        if not self._stop:
+            self._q.put(chunk)
+
+    def stop(self):
+        """Signal the worker to drain and exit. Blocks briefly; the final
+        full-file transcription waits on _whisper_lock anyway."""
+        self._stop = True
+        if self._thread:
+            self._thread.join(timeout=8)
+
+    def _run(self):
+        global _parakeet_model
+        try:
+            import numpy as np
+            import mlx.core as mx
+            from parakeet_mlx import from_pretrained
+
+            with _whisper_lock:
+                if _parakeet_model is None:
+                    _parakeet_model = from_pretrained(PARAKEET_MODEL)
+                buf, buffered, last_emit = [], 0, 0.0
+                with _parakeet_model.transcribe_stream(context_size=(256, 256)) as stream:
+                    while not (self._stop and self._q.empty()):
+                        try:
+                            chunk = self._q.get(timeout=0.15)
+                        except queue.Empty:
+                            continue
+                        data = chunk[:, 0] if getattr(chunk, "ndim", 1) > 1 else chunk
+                        buf.append(data)
+                        buffered += len(data)
+                        if buffered >= 16000:   # ~1s batches
+                            stream.add_audio(mx.array(np.concatenate(buf)))
+                            buf, buffered = [], 0
+                            now = time.time()
+                            if now - last_emit > 0.5:
+                                self._on_text(stream.result.text)
+                                last_emit = now
+                    if buf:
+                        stream.add_audio(mx.array(np.concatenate(buf)))
+                    self._on_text(stream.result.text)
+        except Exception as exc:
+            debug(f"[voice-notes] Live caption error: {exc!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -842,16 +915,23 @@ class ClickablePanel(NSPanel):
 
 class NavDelegate(NSObject):
     """WKNavigationDelegate to log webview load events."""
+
+    def init(self):
+        self = objc.super(NavDelegate, self).init()
+        if self is None:
+            return None
+        self.panel = None  # OverlayPanel — set after construction
+        return self
+
     def webView_didFinishNavigation_(self, webview, navigation):
         debug("WebView finished loading!")
         webview.evaluateJavaScript_completionHandler_(
             "document.querySelector('.record-btn') ? 'record-btn-found' : 'record-btn-NOT-found'",
             lambda result, error: debug(f"JS test: result={result}, error={error}"),
         )
-        webview.evaluateJavaScript_completionHandler_(
-            "typeof window.webkit !== 'undefined' && typeof window.webkit.messageHandlers !== 'undefined' && typeof window.webkit.messageHandlers.bridge !== 'undefined' ? 'bridge-ok' : 'bridge-MISSING'",
-            lambda result, error: debug(f"Bridge test: result={result}, error={error}"),
-        )
+        # Flush any JS that was queued while the page was still loading
+        if self.panel is not None:
+            self.panel._on_webview_ready()
 
     def webView_didFailNavigation_withError_(self, webview, nav, error):
         debug(f"WebView FAILED navigation: {error}")
@@ -935,6 +1015,10 @@ class OverlayPanel:
         self.wav_path = None
         self.duration = 0
         self._last_msg_seq = 0
+        # JS evaluated before the WebView finishes loading is silently
+        # dropped — queue until didFinishNavigation flushes it in order.
+        self._js_ready = False
+        self._js_queue = []
 
         # KVO observer for title changes (our JS→Python bridge)
         self.title_observer = TitleObserver.alloc().init()
@@ -1009,8 +1093,9 @@ class OverlayPanel:
         except Exception:
             pass
 
-        # Navigation delegate for load diagnostics
+        # Navigation delegate for load diagnostics + queued-JS flush
         self.nav_delegate = NavDelegate.alloc().init()
+        self.nav_delegate.panel = self
         self.webview.setNavigationDelegate_(self.nav_delegate)
 
         content_view.addSubview_(self.webview)
@@ -1102,8 +1187,19 @@ class OverlayPanel:
             )
 
     def _eval_js(self, script):
-        """Evaluate JavaScript in the webview."""
+        """Evaluate JavaScript in the webview (queued until the page loads)."""
+        if not self._js_ready:
+            self._js_queue.append(script)
+            return
         if self.webview:
+            self.webview.evaluateJavaScript_completionHandler_(script, None)
+
+    def _on_webview_ready(self):
+        """Called from the navigation delegate when the HTML finishes loading."""
+        self._js_ready = True
+        queued, self._js_queue = self._js_queue, []
+        debug(f"[voice-notes] WebView ready — flushing {len(queued)} queued JS calls")
+        for script in queued:
             self.webview.evaluateJavaScript_completionHandler_(script, None)
 
     def _js_escape(self, text):
@@ -1343,6 +1439,7 @@ class VoiceNotesApp(rumps.App):
         self._duration = 0
         self._last_save_body = None  # for retry
         self._auto_stop_timer = None
+        self._live_caption = None
 
         # Start hotkey listener — F1=dictation, F2=note
         start_hotkey_listener(self._hotkey_dictation, self._hotkey_note)
@@ -1532,6 +1629,15 @@ class VoiceNotesApp(rumps.App):
         self._auto_stop_timer = rumps.Timer(_remind, reminder_secs)
         self._auto_stop_timer.start()
 
+        # Live captions while dictating (parakeet streaming only)
+        if overlay.mode == "dictation" and ENGINE == "parakeet":
+            def on_text(text):
+                snippet = overlay._js_escape((text or "").strip())
+                self._schedule_ui(lambda: overlay._eval_js(f"setLiveTranscript('{snippet}')"))
+            self._live_caption = LiveCaption(on_text)
+            self._live_caption.start()
+            self.recorder.tap = self._live_caption.feed
+
         debug("[voice-notes] Recording started")
 
     def cancel_recording_from_overlay(self):
@@ -1539,6 +1645,7 @@ class VoiceNotesApp(rumps.App):
         if self.state != AppState.RECORDING:
             return
         debug("[voice-notes] Recording cancelled")
+        self._teardown_live_caption()
         timer = getattr(self, '_auto_stop_timer', None)
         if timer:
             try:
@@ -1561,7 +1668,18 @@ class VoiceNotesApp(rumps.App):
             overlay.hide()
             overlay.set_compact(False)
 
+    def _teardown_live_caption(self):
+        """Detach the mic tap and let the caption worker drain on its own
+        thread (it holds _whisper_lock until done, which naturally serializes
+        it before the final transcription)."""
+        self.recorder.tap = None
+        lc = getattr(self, '_live_caption', None)
+        self._live_caption = None
+        if lc:
+            threading.Thread(target=lc.stop, daemon=True).start()
+
     def stop_recording(self):
+        self._teardown_live_caption()
         # Cancel reminder timer and hide banner if still visible
         timer = getattr(self, '_auto_stop_timer', None)
         if timer:
