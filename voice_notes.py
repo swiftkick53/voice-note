@@ -380,19 +380,35 @@ def _transcribe_whisper(data):
     return result.get("text", "").strip()
 
 
-def _transcribe_parakeet(data):
-    """Transcribe with parakeet-mlx via the array API (no ffmpeg needed)."""
+def _transcribe_parakeet(wav_path):
+    """Transcribe with parakeet-mlx using its chunked file API.
+
+    chunk_duration is essential: feeding a whole long recording through the
+    model in one generate() call blows past Metal's GPU limits and SIGABRTs
+    the process (observed on a 53-minute file). parakeet-mlx's transcribe()
+    processes overlapping chunks and merges on token timestamps. Its stock
+    audio loader shells out to ffmpeg, which isn't installed — swap in a
+    soundfile-based loader.
+    """
     global _parakeet_model
     import mlx.core as mx
     from parakeet_mlx import from_pretrained
-    from parakeet_mlx.audio import get_logmel
+    import parakeet_mlx.parakeet as _pk
+
+    def _sf_loader(filename, sampling_rate, dtype=None):
+        # Always float32 regardless of requested dtype: get_logmel's
+        # view(complex, original_dtype) trick assumes 4-byte elements —
+        # bfloat16 audio doubles the frequency bins and crashes the matmul.
+        data = _load_wav_mono_16k(str(filename))   # we record 16k mono WAVs
+        return mx.array(data)
+    _pk.load_audio = _sf_loader
 
     if _parakeet_model is None:
         _parakeet_model = from_pretrained(PARAKEET_MODEL)
-    cfg = getattr(_parakeet_model, "preprocessor_config", None) or _parakeet_model.preprocess_config
-    mel = get_logmel(mx.array(data), cfg)
-    results = _parakeet_model.generate(mel)
-    return " ".join(r.text.strip() for r in results).strip()
+    result = _parakeet_model.transcribe(
+        wav_path, chunk_duration=120.0, overlap_duration=15.0,
+    )
+    return result.text.strip()
 
 
 def transcribe(wav_path):
@@ -403,15 +419,13 @@ def transcribe(wav_path):
                "First transcription may take a moment.")
         _whisper_loaded = True
 
-    data = _load_wav_mono_16k(wav_path)
-
     with _whisper_lock:
         if ENGINE == "parakeet":
             try:
-                return _transcribe_parakeet(data)
+                return _transcribe_parakeet(wav_path)
             except Exception as exc:
                 debug(f"[voice-notes] Parakeet failed, falling back to Whisper: {exc!r}")
-        return _transcribe_whisper(data)
+        return _transcribe_whisper(_load_wav_mono_16k(wav_path))
 
 
 # NOTE: do not add a startup model pre-warm thread. Importing/loading MLX
