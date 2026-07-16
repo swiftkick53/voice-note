@@ -52,6 +52,7 @@ from AppKit import (
     NSViewWidthSizable,
     NSViewHeightSizable,
     NSWindowStyleMaskClosable,
+    NSWindowStyleMaskMiniaturizable,
     NSWindowStyleMaskFullSizeContentView,
     NSWindowStyleMaskResizable,
     NSWindowStyleMaskTitled,
@@ -62,7 +63,18 @@ from Foundation import NSObject, NSURL
 from WebKit import WKWebView, WKWebViewConfiguration, WKUserContentController
 
 
-DEBUG_LOG = Path("/tmp/voice-notes-debug.log")
+# Log lives in the user's own Logs dir, private (0600), size-capped at
+# startup. Never log transcript/note content here — only metadata.
+_LOG_DIR = Path.home() / "Library" / "Logs" / "VoiceNotes"
+_LOG_DIR.mkdir(parents=True, exist_ok=True)
+DEBUG_LOG = _LOG_DIR / "debug.log"
+try:
+    if DEBUG_LOG.exists() and DEBUG_LOG.stat().st_size > 5 * 1024 * 1024:
+        DEBUG_LOG.unlink()
+    DEBUG_LOG.touch(mode=0o600, exist_ok=True)
+    os.chmod(DEBUG_LOG, 0o600)
+except OSError:
+    pass
 
 def debug(msg):
     """Write debug message to file (stdout unreliable in menu bar apps)."""
@@ -137,7 +149,6 @@ SAMPLE_RATE = CONFIG.get("sample_rate", 16000)
 INPUT_CHANNEL = CONFIG.get("input_channel", 1)
 # input_device: device index (int) or name substring (str). None = system default.
 INPUT_DEVICE = CONFIG.get("input_device", None)
-# Max recording length in seconds before auto-stop (default 10 min).
 # Minutes before showing the "still recording?" reminder in the overlay.
 RECORD_REMINDER_MINUTES = CONFIG.get("record_reminder_minutes", 30)
 # Max duration to attempt transcription — refuse anything longer (default 2 hours).
@@ -710,11 +721,24 @@ def list_recent_notes(limit=20):
             else:
                 label = "just now"
 
+            # Calendar-correct group label (computed here so the UI never
+            # has to parse human-formatted strings)
+            day_delta = (now.date() - mtime.date()).days
+            if day_delta == 0:
+                group = "Today"
+            elif day_delta == 1:
+                group = "Yesterday"
+            elif day_delta < 7:
+                group = f"{day_delta} days ago"
+            else:
+                group = mtime.strftime("%b %d")
+
             notes.append({
                 "filename": path.name,
                 "title": path.stem,
                 "modified": label,
                 "duration": duration,
+                "group": group,
             })
         except OSError:
             continue
@@ -1021,7 +1045,7 @@ class WebViewMessageHandler(NSObject, protocols=[WKScriptMessageHandlerProtocol]
             return  # duplicate (e.g. also delivered via title fallback)
         self.panel._last_msg_seq = seq
         if body.get("action") != "drag_zone":   # too chatty to log
-            debug(f"Bridge message: {body}")
+            debug(f"Bridge message: {body.get('action', '?')} (_seq={body.get('_seq')})")
         self.panel._on_bridge_message(body)
 
 
@@ -1052,7 +1076,7 @@ class TitleObserver(NSObject):
             if seq <= self.panel._last_msg_seq:
                 return  # duplicate
             self.panel._last_msg_seq = seq
-            debug(f"Bridge message: {body}")
+            debug(f"Bridge message: {body.get('action', '?')} (_seq={body.get('_seq')})")
             self.panel._on_bridge_message(body)
         except Exception as e:
             debug(f"Bridge parse error: {e}")
@@ -1090,6 +1114,7 @@ class OverlayPanel:
         style = (
             NSWindowStyleMaskTitled
             | NSWindowStyleMaskClosable
+            | NSWindowStyleMaskMiniaturizable
             | NSWindowStyleMaskFullSizeContentView
             | NSWindowStyleMaskResizable
         )
@@ -1206,7 +1231,8 @@ class OverlayPanel:
         elif action == "close":
             self.app.hide_overlay()
         elif action == "minimize":
-            self.app.hide_overlay()
+            # Real macOS minimize — genie to the Dock; click there to restore
+            self.panel.miniaturize_(None)
         elif action == "playback":
             self.app.playback_from_overlay()
         elif action == "stop_playback":
@@ -1464,7 +1490,7 @@ def _render_sf_symbol_png(symbol_name, out_path, point_size=18):
 
 # Menu-bar icons per state. Rendered once on first use; rumps serves them as
 # template PNGs so macOS handles tinting across appearances.
-_ICON_CACHE_DIR = Path("/tmp/voice-notes-icons")
+_ICON_CACHE_DIR = Path(tempfile.gettempdir()) / "voice-notes-icons"
 _ICON_CACHE_DIR.mkdir(exist_ok=True)
 
 ICON_IDLE       = "waveform"
@@ -1484,15 +1510,14 @@ def _icon_path(symbol_name):
 class VoiceNotesApp(rumps.App):
     def __init__(self):
         idle_icon = _icon_path(ICON_IDLE)
-        # Keep rumps' default Quit menu item (⌘Q) — suppressing it before
-        # left the app with no user-facing way to exit.
-        quit_item = rumps.MenuItem("Quit Voice Notes", key="q")
+        # Own quit item (instead of rumps' default) so we can warn before
+        # discarding an in-progress recording.
         if idle_icon:
             super().__init__("Voice Notes", icon=idle_icon, template=True,
-                             quit_button=quit_item)
+                             quit_button=None)
         else:
             super().__init__("Voice Notes", title=ICON_FALLBACK_EMOJI,
-                             quit_button=quit_item)
+                             quit_button=None)
         self.recorder = Recorder()
         self.player = AudioPlayer()
         self.state = AppState.IDLE
@@ -1503,7 +1528,7 @@ class VoiceNotesApp(rumps.App):
             None,
             rumps.MenuItem("Open Notes Folder", callback=self.open_notes),
             None,
-            # Quit is appended automatically by rumps from quit_button above.
+            rumps.MenuItem("Quit Voice Notes", callback=self._quit_clicked, key="q"),
         ]
 
         self.overlay = None
@@ -1884,7 +1909,7 @@ class VoiceNotesApp(rumps.App):
                     return
                 ex.shutdown(wait=False)
 
-                debug(f"[voice-notes] Transcript: {transcript[:200] if transcript else '(empty)'}")
+                debug(f"[voice-notes] Transcript received ({len(transcript) if transcript else 0} chars)")
 
                 if not transcript:
                     self._schedule_ui(self._transcription_failed)
@@ -2005,6 +2030,16 @@ class VoiceNotesApp(rumps.App):
         Automation permission that launchd-spawned processes don't get.)
         """
         try:
+            # 0. Remember what was on the clipboard so we can restore it —
+            # dictation shouldn't destroy whatever the user had copied.
+            old_clip = None
+            try:
+                r = subprocess.run(["pbpaste"], capture_output=True, text=True, timeout=5)
+                if r.returncode == 0:
+                    old_clip = r.stdout
+            except Exception:
+                pass
+
             # 1. Put text on clipboard
             copy_to_clipboard(text)
 
@@ -2036,6 +2071,12 @@ class VoiceNotesApp(rumps.App):
                        "To fix: add /usr/bin/osascript to Accessibility.")
             else:
                 debug(f"[voice-notes] Pasted {len(text)} chars at cursor")
+                # 4. Paste landed — give the target app a beat to consume the
+                # clipboard, then put the user's original contents back.
+                if old_clip is not None and old_clip != text:
+                    time.sleep(0.6)
+                    copy_to_clipboard(old_clip)
+                    debug("[voice-notes] Restored previous clipboard")
         except Exception as exc:
             debug(f"[voice-notes] _type_at_cursor error: {exc!r}")
 
@@ -2048,9 +2089,9 @@ class VoiceNotesApp(rumps.App):
             # A slow suggestion for note A must never attach to note B —
             # only apply if we're still on the same recording generation.
             if gen != self._note_gen:
-                debug(f"[voice-notes] Dropping stale title suggestion: {title}")
+                debug("[voice-notes] Dropping stale title suggestion")
                 return
-            debug(f"[voice-notes] Title suggestion: {title}")
+            debug("[voice-notes] Title suggestion applied")
             self._ensure_overlay().update_title_suggestion(title)
 
         self._schedule_ui(apply)
@@ -2277,7 +2318,7 @@ class VoiceNotesApp(rumps.App):
                     transcript, action=action_type, project=project,
                     custom_prompt=custom_prompt,
                 )
-                debug(f"[voice-notes] Claude output: {content[:200]}")
+                debug(f"[voice-notes] Claude output received ({len(content)} chars)")
 
                 note_title = save_note(content, duration, title=title)
                 debug(f"[voice-notes] Saved: {note_title}")
@@ -2375,6 +2416,17 @@ class VoiceNotesApp(rumps.App):
     def open_notes(self, _=None):
         subprocess.run(["open", str(NOTES_DIR)])
 
+    def _quit_clicked(self, _=None):
+        if self.state == AppState.RECORDING:
+            res = rumps.alert(
+                "Recording in progress",
+                "Quitting now will discard the current recording.",
+                ok="Quit anyway", cancel="Keep recording",
+            )
+            if res != 1:
+                return
+        rumps.quit_application()
+
     # --- Audio level push ---
 
     def _push_level(self, _timer):
@@ -2456,8 +2508,8 @@ class VoiceNotesApp(rumps.App):
             self.state = AppState.IDLE
 
 
-_INSTANCE_LOCK_PATH = Path("/tmp/voice-notes.lock")
-_INSTANCE_PID_PATH  = Path("/tmp/voice-notes.pid")
+_INSTANCE_LOCK_PATH = Path(tempfile.gettempdir()) / "voice-notes.lock"
+_INSTANCE_PID_PATH  = Path(tempfile.gettempdir()) / "voice-notes.pid"
 
 
 def _acquire_single_instance_lock():
@@ -2475,6 +2527,11 @@ def _acquire_single_instance_lock():
         # Another instance is running — ask it to surface the overlay, then bail.
         try:
             existing = int(_INSTANCE_PID_PATH.read_text().strip())
+            # PIDs recycle: only signal if it's actually a voice_notes process
+            ps = subprocess.run(["ps", "-p", str(existing), "-o", "command="],
+                                capture_output=True, text=True)
+            if "voice_notes" not in (ps.stdout or ""):
+                raise RuntimeError(f"pid {existing} is not voice_notes")
             _os.kill(existing, _signal.SIGUSR1)
             debug(f"[voice-notes] Already running (pid {existing}); signaled it to show overlay")
         except Exception as exc:

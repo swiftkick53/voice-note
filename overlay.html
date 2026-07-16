@@ -128,6 +128,7 @@ body {
   background: var(--card); border: 1px solid var(--card-border);
   border-radius: 14px; padding: 14px 16px;
   font: 400 13px/1.55 var(--ui); color: var(--ink-1);
+  overflow-wrap: anywhere;
 }
 
 /* ---------- blob ---------- */
@@ -140,6 +141,7 @@ body {
 @keyframes pingRing { 0% { transform: scale(1); opacity: 0.5; } 100% { transform: scale(1.7); opacity: 0; } }
 @keyframes dotPulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.25); } }
 @keyframes progressCrawl { 0% { width: 4%; } 20% { width: 38%; } 55% { width: 66%; } 100% { width: 92%; } }
+@keyframes progressPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
 
 .blob-grab { cursor: grab; touch-action: none; will-change: transform; }
 .blob-grab:active { cursor: grabbing; }
@@ -158,7 +160,7 @@ body {
 
 /* ---------- transcribing / saving progress ---------- */
 .progress-track { width: 100%; height: 5px; border-radius: 3px; background: oklch(1 0 0 / 0.08); overflow: hidden; }
-.progress-fill { height: 100%; border-radius: 3px; animation: progressCrawl 75s ease-out forwards; }
+.progress-fill { height: 100%; border-radius: 3px; animation: progressCrawl 75s ease-out forwards, progressPulse 2.4s ease-in-out infinite; }
 
 /* ---------- post-note ---------- */
 #title-input {
@@ -366,6 +368,7 @@ body.compact-mode #compact-strip {
       <button data-mode="note" onclick="setMode('note')" class="active">Note</button>
       <button data-mode="dictation" onclick="setMode('dictation')">Dictation</button>
     </div>
+    <button class="win-x" onclick="send('minimize')" title="Minimize">−</button>
     <button class="win-x" onclick="send('close')" title="Hide (Esc)">×</button>
   </div>
   <div class="stage" style="gap:26px">
@@ -453,6 +456,7 @@ body.compact-mode #compact-strip {
     </div>
     <div class="spacer"></div>
     <div class="hd-meta" id="note-meta">—</div>
+    <button class="win-x" onclick="send('minimize')" title="Minimize">−</button>
     <button class="win-x" onclick="send('close')" title="Hide">×</button>
   </div>
   <div class="stage" style="align-items:stretch;justify-content:flex-start;gap:12px;padding:4px 20px 12px;overflow:hidden">
@@ -490,6 +494,7 @@ body.compact-mode #compact-strip {
     </div>
     <div class="spacer"></div>
     <div class="hd-meta" id="preview-action-label">—</div>
+    <button class="win-x" onclick="send('minimize')" title="Minimize">−</button>
     <button class="win-x" onclick="send('close')" title="Hide">×</button>
   </div>
   <div class="stage" style="align-items:stretch;justify-content:flex-start;gap:10px;padding:2px 20px 10px;overflow:hidden">
@@ -559,6 +564,7 @@ body.compact-mode #compact-strip {
     <button class="pill" style="padding:6px 12px" onclick="navigate('audio')">← Capture</button>
     <div class="spacer drag-spot" style="height:52px"></div>
     <div class="hd-meta" id="library-count"></div>
+    <button class="win-x" onclick="send('minimize')" title="Minimize">−</button>
     <button class="win-x" onclick="send('close')" title="Hide">×</button>
   </div>
   <div class="search-field">
@@ -575,6 +581,7 @@ body.compact-mode #compact-strip {
     <button class="pill" style="padding:6px 12px" onclick="navigate('audio')">← Capture</button>
     <div class="spacer drag-spot" style="height:52px"></div>
     <div style="font:400 19px var(--display)">System</div>
+    <button class="win-x" onclick="send('minimize')" title="Minimize">−</button>
     <button class="win-x" onclick="send('close')" title="Hide">×</button>
   </div>
   <div class="set-scroll">
@@ -765,7 +772,20 @@ function setState(state) {
   updateCompactStrip();
 }
 
+function flushSettingsSave() {
+  if (_settingsSaveTimer) {
+    clearTimeout(_settingsSaveTimer);
+    _settingsSaveTimer = null;
+    send('save_settings', {
+      default_mode: defaultModeUI,
+      default_action: defaultActionUI,
+      copy_to_clipboard: document.getElementById('set-clipboard-default').checked
+    });
+  }
+}
+
 function navigate(page) {
+  if (currentPage === 'settings' && page !== 'settings') flushSettingsSave();
   currentPage = page;
   if (page === 'audio') { showScreen(currentState); return; }
   if (page === 'notes') { showScreen('library'); send('get_recent_notes'); }
@@ -1216,7 +1236,7 @@ function renderNotes() {
 
   var lastGroup = null;
   notes.forEach(function(n) {
-    var group = _groupFor(n.modified);
+    var group = n.group || _groupFor(n.modified);
     if (group !== lastGroup) {
       var g = document.createElement('div');
       g.className = 'group-label';
