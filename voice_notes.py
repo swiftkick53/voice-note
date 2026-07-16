@@ -2539,6 +2539,7 @@ class VoiceNotesApp(rumps.App):
             "default_mode": CONFIG.get("default_mode", "note"),
             "default_action": CONFIG.get("default_action", "clean_format"),
             "copy_to_clipboard": CONFIG.get("copy_to_clipboard", False),
+            "theme_hue": CONFIG.get("theme_hue", 60),
             "hotkey_dictation": hotkey_for("dictation"),
             "hotkey_note": hotkey_for("note"),
             "whisper_model": WHISPER_MODEL,
@@ -2636,7 +2637,7 @@ class VoiceNotesApp(rumps.App):
         """Apply-on-change: persist silently (the overlay shows its own toast).
         No echo back to the webview — it already reflects the new values, and
         an echo would fight rapid successive changes."""
-        for key in ("default_mode", "default_action", "copy_to_clipboard"):
+        for key in ("default_mode", "default_action", "copy_to_clipboard", "theme_hue"):
             if key in body:
                 CONFIG[key] = body[key]
         save_config(CONFIG)

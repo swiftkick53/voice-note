@@ -23,6 +23,7 @@
 }
 
 :root {
+  --ah: 60;   /* accent hue — user-themeable; state hues stay semantic */
   --ink-0: oklch(0.97 0.006 75);   /* primary text */
   --ink-1: oklch(0.87 0.008 70);   /* body */
   --ink-2: oklch(0.66 0.012 65);   /* secondary */
@@ -43,20 +44,20 @@ html, body { width: 100%; height: 100%; overflow: hidden; }
 body {
   font-family: var(--ui);
   color: var(--ink-0);
-  background: oklch(0.13 0.012 55);
+  background: oklch(0.13 0.012 calc(var(--ah) - 5));
   user-select: none; -webkit-user-select: none;
 }
 
 /* ---------- state-tinted background layers (crossfade 400ms) ---------- */
 .bg { position: fixed; inset: 0; opacity: 0; transition: opacity 0.4s ease; pointer-events: none; }
 .bg.on { opacity: 1; }
-#bg-amber   { background: linear-gradient(180deg, oklch(0.17 0.02 60),  oklch(0.13 0.012 55)); }
+#bg-amber   { background: linear-gradient(180deg, oklch(0.17 0.02 var(--ah)),  oklch(0.13 0.012 calc(var(--ah) - 5))); }
 #bg-red     { background: linear-gradient(180deg, oklch(0.17 0.025 25), oklch(0.13 0.014 22)); }
 #bg-cyan    { background: linear-gradient(180deg, oklch(0.17 0.02 190), oklch(0.13 0.012 195)); }
 #bg-green   { background: linear-gradient(180deg, oklch(0.17 0.02 160), oklch(0.13 0.012 165)); }
 #bg-blue    { background: linear-gradient(180deg, oklch(0.17 0.02 230), oklch(0.13 0.012 235)); }
 #bg-deepred { background: linear-gradient(180deg, oklch(0.17 0.03 15),  oklch(0.13 0.015 12)); }
-#bg-quiet   { background: linear-gradient(180deg, oklch(0.16 0.015 60), oklch(0.13 0.012 55)); }
+#bg-quiet   { background: linear-gradient(180deg, oklch(0.16 0.015 var(--ah)), oklch(0.13 0.012 calc(var(--ah) - 5))); }
 
 /* ---------- screens: fixed 3-zone grid ---------- */
 .screen { position: absolute; inset: 0; display: flex; flex-direction: column; }
@@ -93,9 +94,9 @@ body {
 .pill:active { transform: scale(0.97); }
 .pill.primary {
   padding: 9px 22px; font: 600 13px var(--ui); border: none;
-  background: oklch(0.72 0.15 60); color: oklch(0.16 0.03 55);
+  background: oklch(0.72 0.15 var(--ah)); color: oklch(0.16 0.03 calc(var(--ah) - 5));
 }
-.pill.primary:hover { background: oklch(0.77 0.15 60); }
+.pill.primary:hover { background: oklch(0.77 0.15 var(--ah)); }
 .pill.primary.red { background: oklch(0.72 0.15 15); color: oklch(0.98 0.01 15); }
 .pill.primary.red:hover { background: oklch(0.77 0.15 15); }
 
@@ -107,7 +108,7 @@ body {
   padding: 4px 12px; border-radius: 999px; border: none; background: transparent;
   font: 500 11px var(--ui); color: var(--ink-2); cursor: pointer;
 }
-.seg button.active { font-weight: 600; background: oklch(0.72 0.15 60 / 0.25); color: oklch(0.88 0.08 60); }
+.seg button.active { font-weight: 600; background: oklch(0.72 0.15 var(--ah) / 0.25); color: oklch(0.88 0.08 var(--ah)); }
 .seg.blue button.active { background: oklch(0.72 0.15 230 / 0.3); color: oklch(0.88 0.07 230); }
 
 .keycap {
@@ -179,9 +180,9 @@ body {
 .chip:active { transform: scale(0.97); }
 .chip.selected {
   font-weight: 600;
-  background: oklch(0.72 0.15 60 / 0.28);
-  border-color: oklch(0.72 0.15 60 / 0.5);
-  color: oklch(0.9 0.09 60);
+  background: oklch(0.72 0.15 var(--ah) / 0.28);
+  border-color: oklch(0.72 0.15 var(--ah) / 0.5);
+  color: oklch(0.9 0.09 var(--ah));
 }
 #transcript-edit {
   width: 100%; flex: 1; min-height: 0; resize: none; outline: none;
@@ -199,7 +200,7 @@ body {
 }
 #custom-prompt::placeholder { color: var(--ink-3); }
 .check-row { display: flex; align-items: center; gap: 7px; font: 400 11px var(--ui); color: var(--ink-2); cursor: pointer; }
-.check-row input { accent-color: oklch(0.72 0.15 60); }
+.check-row input { accent-color: oklch(0.72 0.15 var(--ah)); }
 
 /* ---------- countdown / reminder bars ---------- */
 .bar-banner {
@@ -233,7 +234,7 @@ body {
 }
 .search-field input::placeholder { color: var(--ink-3); }
 #notes-list { flex: 1; overflow-y: auto; padding: 0 18px; display: flex; flex-direction: column; gap: 8px; min-height: 0; }
-.group-label { font: 400 14px var(--display); color: oklch(0.7 0.05 60); margin-top: 4px; }
+.group-label { font: 400 14px var(--display); color: oklch(0.7 0.05 var(--ah)); margin-top: 4px; }
 .note-row {
   background: var(--card); border: 1px solid var(--card-border);
   border-radius: 14px; padding: 12px 14px; flex: none;
@@ -266,11 +267,20 @@ body {
   padding: 4px 12px; border-radius: 999px;
   font: 600 11px var(--ui);
 }
-.val-chip.amber { background: oklch(0.72 0.15 60 / 0.22); color: oklch(0.88 0.08 60); cursor: pointer; }
+.val-chip.amber { background: oklch(0.72 0.15 var(--ah) / 0.22); color: oklch(0.88 0.08 var(--ah)); cursor: pointer; }
 .val-chip.blue { background: oklch(0.72 0.15 230 / 0.22); color: oklch(0.88 0.07 230); text-transform: capitalize; }
 .val-mono { font: 500 11px var(--mono); color: oklch(0.78 0.05 230); }
 .val-mono.small { font-size: 10.5px; max-width: 180px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .set-row input[type=checkbox] { accent-color: oklch(0.72 0.15 230); }
+
+/* ---------- theme swatches ---------- */
+.swatches { display: flex; gap: 8px; }
+.swatch {
+  width: 20px; height: 20px; border-radius: 50%; cursor: pointer;
+  border: 2px solid transparent; transition: transform 0.15s ease;
+}
+.swatch:hover { transform: scale(1.15); }
+.swatch.active { border-color: oklch(0.97 0.006 75 / 0.85); }
 
 /* ---------- toast ---------- */
 #mini-toast {
@@ -360,7 +370,7 @@ body.compact-mode #compact-strip {
 <div class="screen" id="screen-idle">
   <div class="hd">
     <div class="hd-cluster drag-spot">
-      <div class="dot" style="background:oklch(0.72 0.15 60)"></div>
+      <div class="dot" style="background:oklch(0.72 0.15 var(--ah))"></div>
       <div class="hd-title">Voice Notes</div>
     </div>
     <div class="spacer"></div>
@@ -374,7 +384,7 @@ body.compact-mode #compact-strip {
   <div class="stage" style="gap:26px">
     <div style="font:400 26px var(--display);color:oklch(0.92 0.02 75)">What's on your mind?</div>
     <div class="blob-grab record-btn" id="blob-idle-wrap" style="width:185px;height:185px">
-      <div class="blob" id="blob-idle" style="background:radial-gradient(circle at 32% 28%, oklch(0.9 0.1 65), oklch(0.72 0.15 60) 50%, oklch(0.52 0.14 55) 82%, oklch(0.42 0.11 50));box-shadow:0 24px 60px -18px oklch(0.72 0.15 60/0.5), inset 0 -14px 30px oklch(0.3 0.08 55/0.5)">
+      <div class="blob" id="blob-idle" style="background:radial-gradient(circle at 32% 28%, oklch(0.9 0.1 calc(var(--ah) + 5)), oklch(0.72 0.15 var(--ah)) 50%, oklch(0.52 0.14 calc(var(--ah) - 5)) 82%, oklch(0.42 0.11 calc(var(--ah) - 10)));box-shadow:0 24px 60px -18px oklch(0.72 0.15 var(--ah)/0.5), inset 0 -14px 30px oklch(0.3 0.08 calc(var(--ah) - 5)/0.5)">
         <div class="spec"></div>
       </div>
     </div>
@@ -451,7 +461,7 @@ body.compact-mode #compact-strip {
 <div class="screen hidden" id="screen-post-note">
   <div class="hd">
     <div class="hd-cluster drag-spot">
-      <div class="dot" style="background:oklch(0.72 0.15 60)"></div>
+      <div class="dot" style="background:oklch(0.72 0.15 var(--ah))"></div>
       <div class="hd-title">New note</div>
     </div>
     <div class="spacer"></div>
@@ -489,7 +499,7 @@ body.compact-mode #compact-strip {
 <div class="screen hidden" id="screen-preview">
   <div class="hd">
     <div class="hd-cluster drag-spot">
-      <div class="dot" style="background:oklch(0.72 0.15 60)"></div>
+      <div class="dot" style="background:oklch(0.72 0.15 var(--ah))"></div>
       <div class="hd-title">Preview</div>
     </div>
     <div class="spacer"></div>
@@ -513,7 +523,7 @@ body.compact-mode #compact-strip {
 <div class="screen hidden" id="screen-post-dictation">
   <div class="hd">
     <div class="hd-cluster drag-spot">
-      <div class="dot" style="background:oklch(0.72 0.15 60)"></div>
+      <div class="dot" style="background:oklch(0.72 0.15 var(--ah))"></div>
       <div class="hd-title">Dictation</div>
     </div>
     <div class="spacer"></div>
@@ -600,6 +610,10 @@ body.compact-mode #compact-strip {
       <div class="set-row">
         <span>Copy to clipboard</span>
         <input type="checkbox" id="set-clipboard-default" onchange="settingsChanged()"/>
+      </div>
+      <div class="set-row">
+        <span>Theme</span>
+        <span class="swatches" id="theme-swatches"></span>
       </div>
       <div class="set-row">
         <span>Dictation hotkey</span>
@@ -783,7 +797,8 @@ function flushSettingsSave() {
     send('save_settings', {
       default_mode: defaultModeUI,
       default_action: defaultActionUI,
-      copy_to_clipboard: document.getElementById('set-clipboard-default').checked
+      copy_to_clipboard: document.getElementById('set-clipboard-default').checked,
+      theme_hue: currentThemeHue
     });
   }
 }
@@ -1290,6 +1305,7 @@ function setSettings(s) {
   });
   document.getElementById('default-action-label').textContent = ACTION_LABELS[defaultActionUI] || defaultActionUI;
   document.getElementById('set-clipboard-default').checked = !!s.copy_to_clipboard;
+  setThemeHue(s.theme_hue || 60, false);
   _paintHotkeyChips();
   document.getElementById('info-engine').textContent = s.engine || 'whisper';
   document.getElementById('info-model').textContent = s.active_model || s.whisper_model || '—';
@@ -1313,6 +1329,31 @@ function cycleDefaultAction() {
   defaultActionUI = ACTION_KEYS[(idx + 1) % ACTION_KEYS.length];
   document.getElementById('default-action-label').textContent = ACTION_LABELS[defaultActionUI];
   settingsChanged();
+}
+
+var THEME_HUES = [60, 25, 105, 160, 190, 230, 290, 340];
+var currentThemeHue = 60;
+function setThemeHue(h, fromUser) {
+  currentThemeHue = h;
+  document.documentElement.style.setProperty('--ah', h);
+  document.querySelectorAll('#theme-swatches .swatch').forEach(function(s) {
+    s.classList.toggle('active', Number(s.dataset.hue) === Number(h));
+  });
+  if (fromUser) settingsChanged();
+}
+function buildSwatches() {
+  var box = document.getElementById('theme-swatches');
+  if (!box) return;
+  box.innerHTML = '';
+  THEME_HUES.forEach(function(h) {
+    var s = document.createElement('span');
+    s.className = 'swatch' + (h === currentThemeHue ? ' active' : '');
+    s.dataset.hue = h;
+    s.style.background = 'radial-gradient(circle at 32% 28%, oklch(0.85 0.12 ' + h + '), oklch(0.6 0.15 ' + h + '))';
+    s.title = 'Hue ' + h;
+    s.onclick = function() { setThemeHue(h, true); };
+    box.appendChild(s);
+  });
 }
 
 var _hotkeyCapture = null;
@@ -1371,7 +1412,8 @@ function saveSettings() {
   send('save_settings', {
     default_mode: defaultModeUI,
     default_action: defaultActionUI,
-    copy_to_clipboard: document.getElementById('set-clipboard-default').checked
+    copy_to_clipboard: document.getElementById('set-clipboard-default').checked,
+    theme_hue: currentThemeHue
   });
   showToast('✓ Saved');
 }
@@ -1454,6 +1496,7 @@ document.addEventListener('keydown', function(e) {
 
 // ============ INIT ============
 buildChips();
+buildSwatches();
 initBlobPhysics();
 reportDragZone();
 </script>
