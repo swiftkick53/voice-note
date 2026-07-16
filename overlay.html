@@ -608,18 +608,18 @@ body.compact-mode #compact-strip {
     </div>
     <div class="set-group-label">Engine</div>
     <div class="set-card">
-      <div class="set-row"><span>Engine</span><span class="val-chip blue" id="info-engine">—</span></div>
+      <div class="set-row"><span>Engine</span><span class="val-chip blue" id="info-engine" onclick="toggleEngine()" style="cursor:pointer" title="Click to switch engine">—</span></div>
       <div class="set-row"><span>Model</span><span class="val-mono small" id="info-model">—</span></div>
       <div class="set-row"><span>Sample rate</span><span class="val-mono" id="info-sample">—</span></div>
     </div>
     <div class="set-group-label">Storage</div>
     <div class="set-card">
-      <div class="set-row"><span>Vault</span><span class="val-mono small" id="info-vault">—</span></div>
-      <div class="set-row"><span>Notes folder</span><span class="val-mono small" id="info-notes">—</span></div>
+      <div class="set-row"><span>Vault</span><span class="val-mono small" id="info-vault" onclick="send('choose_vault')" style="cursor:pointer" title="Click to choose a different vault folder">—</span></div>
+      <div class="set-row"><span>Notes folder</span><span class="val-mono small" id="info-notes" onclick="send('choose_notes_folder')" style="cursor:pointer" title="Click to choose where notes are saved">—</span></div>
       <div class="set-row"><span>Version</span><span class="val-mono" id="info-version">—</span></div>
     </div>
     <div style="text-align:center;font:400 11px var(--ui);color:var(--ink-3);padding:2px 0 8px;flex:none">
-      changes apply immediately
+      changes apply immediately · click values to change them
     </div>
   </div>
 </div>
@@ -1308,6 +1308,11 @@ function cycleDefaultAction() {
   defaultActionUI = ACTION_KEYS[(idx + 1) % ACTION_KEYS.length];
   document.getElementById('default-action-label').textContent = ACTION_LABELS[defaultActionUI];
   settingsChanged();
+}
+
+function toggleEngine() {
+  var next = (currentSettings.engine === 'parakeet') ? 'whisper' : 'parakeet';
+  send('set_engine', {engine: next});
 }
 
 var _settingsSaveTimer = null;

@@ -159,6 +159,43 @@ PASTE_PREVIEW_SECONDS = CONFIG.get("paste_preview_seconds", 1.5)
 NOTES_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def update_paths(vault_path=None, notes_folder=None):
+    """Re-point the vault / notes locations at runtime and persist them.
+    All save/list functions read these module globals at call time."""
+    global VAULT, NOTES_DIR, DAILY_DIR
+    if vault_path:
+        CONFIG["vault_path"] = str(vault_path)
+    if notes_folder is not None:
+        CONFIG["notes_folder"] = str(notes_folder)
+    save_config(CONFIG)
+    VAULT = Path(os.path.expanduser(CONFIG["vault_path"]))
+    NOTES_DIR = VAULT / CONFIG.get("notes_folder", "08 Summaries/Voice Notes")
+    DAILY_DIR = VAULT / "02 Daily"
+    NOTES_DIR.mkdir(parents=True, exist_ok=True)
+    debug(f"[voice-notes] Paths updated: notes={NOTES_DIR}")
+
+
+def set_engine(new_engine):
+    """Switch the transcription engine at runtime and persist the choice."""
+    global ENGINE, ACTIVE_MODEL, _whisper_loaded
+    if new_engine not in ("whisper", "parakeet"):
+        return False
+    CONFIG["engine"] = new_engine
+    save_config(CONFIG)
+    ENGINE = new_engine
+    ACTIVE_MODEL = PARAKEET_MODEL if ENGINE == "parakeet" else WHISPER_MODEL
+    _whisper_loaded = False   # next transcription gets load headroom + notice
+    # If the newly selected model was never downloaded, lift offline mode
+    # so the first transcription can fetch it.
+    cache = Path(os.path.expanduser("~/.cache/huggingface/hub")) / (
+        "models--" + ACTIVE_MODEL.replace("/", "--")
+    )
+    if not cache.exists():
+        os.environ.pop("HF_HUB_OFFLINE", None)
+    debug(f"[voice-notes] Engine switched to {ENGINE}")
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Action prompt templates
 # ---------------------------------------------------------------------------
@@ -1271,6 +1308,12 @@ class OverlayPanel:
             # UI went preview → editor; mirror it in the Python state machine
             if self.app.state == AppState.PREVIEW:
                 self.app.state = AppState.POST_RECORDING
+        elif action == "choose_vault":
+            self.app.choose_vault_from_overlay()
+        elif action == "choose_notes_folder":
+            self.app.choose_notes_folder_from_overlay()
+        elif action == "set_engine":
+            self.app.set_engine_from_overlay(body.get("engine", ""))
         elif action == "cancel_recording":
             self.app.cancel_recording_from_overlay()
         elif action == "open_settings":
@@ -2482,6 +2525,62 @@ class VoiceNotesApp(rumps.App):
         }
         if self.overlay:
             self.overlay.push_settings(settings)
+
+    def _choose_folder(self, title, start_dir=None):
+        """Native folder picker; returns a Path or None. Runs modally on the
+        main thread (bridge messages arrive there)."""
+        from AppKit import NSOpenPanel
+        panel = NSOpenPanel.openPanel()
+        panel.setCanChooseFiles_(False)
+        panel.setCanChooseDirectories_(True)
+        panel.setAllowsMultipleSelection_(False)
+        panel.setCanCreateDirectories_(True)
+        panel.setTitle_(title)
+        panel.setMessage_(title)
+        panel.setPrompt_("Choose")
+        if start_dir and Path(start_dir).exists():
+            panel.setDirectoryURL_(NSURL.fileURLWithPath_(str(start_dir)))
+        panel.setLevel_(NSFloatingWindowLevel + 1)   # above our floating panel
+        if panel.runModal() == 1:   # NSModalResponseOK
+            urls = panel.URLs()
+            if urls and urls.count() > 0:
+                return Path(urls.objectAtIndex_(0).path())
+        return None
+
+    def choose_vault_from_overlay(self):
+        folder = self._choose_folder("Choose your Obsidian vault folder", VAULT)
+        if not folder:
+            return
+        update_paths(vault_path=folder)
+        self.send_settings()
+        self._ensure_overlay()._eval_js("showToast('✓ Vault updated')")
+
+    def choose_notes_folder_from_overlay(self):
+        start = NOTES_DIR if NOTES_DIR.exists() else VAULT
+        folder = self._choose_folder(
+            "Choose the notes folder (must be inside the vault)", start)
+        if not folder:
+            return
+        try:
+            rel = folder.relative_to(VAULT)
+        except ValueError:
+            self._ensure_overlay()._eval_js(
+                "showToast('Folder must be inside the vault')")
+            return
+        update_paths(notes_folder=rel.as_posix())
+        self.send_settings()
+        self._ensure_overlay()._eval_js("showToast('✓ Notes folder updated')")
+
+    def set_engine_from_overlay(self, engine):
+        if self.state in (AppState.TRANSCRIBING, AppState.SAVING):
+            self._ensure_overlay()._eval_js(
+                "showToast('Busy — switch engines after processing finishes')")
+            return
+        if set_engine(engine):
+            self.send_settings()
+            ov = self._ensure_overlay()
+            ov._eval_js(f"setEngineModel('{ov._js_escape(ACTIVE_MODEL)}')")
+            ov._eval_js(f"showToast('✓ Engine: {engine}')")
 
     def save_settings_from_overlay(self, body):
         """Apply-on-change: persist silently (the overlay shows its own toast).
