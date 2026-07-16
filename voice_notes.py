@@ -745,6 +745,15 @@ unread: true
 
 """
     note_path = NOTES_DIR / filename
+    # Never silently overwrite: filenames are minute-granular, so two quick
+    # saves (or same-titled notes) can collide — suffix a counter instead.
+    if note_path.exists():
+        stem = note_path.stem
+        n = 2
+        while (NOTES_DIR / f"{stem} {n}.md").exists():
+            n += 1
+        filename = f"{stem} {n}.md"
+        note_path = NOTES_DIR / filename
     with open(note_path, "w") as f:
         f.write(frontmatter + content)
 
@@ -970,16 +979,22 @@ class WebViewMessageHandler(NSObject, protocols=[WKScriptMessageHandlerProtocol]
         return self
 
     def userContentController_didReceiveScriptMessage_(self, controller, message):
-        """Unused fallback — the overlay currently routes all JS→Python calls
-        through the document.title KVO bridge (see TitleObserver). This handler
-        stays registered so window.webkit.messageHandlers.bridge exists, which
-        some JS guards check before falling back to the title bridge.
-        """
-        body = message.body()
-        if not isinstance(body, dict):
+        """Primary JS→Python transport. postMessage delivery is ordered and
+        never coalesced, unlike the title-KVO fallback (which WebKit can
+        collapse under rapid successive sends, dropping messages)."""
+        try:
+            body = dict(message.body())
+        except (TypeError, ValueError):
             return
-        if self.panel is not None:
-            self.panel._on_bridge_message(body)
+        if self.panel is None:
+            return
+        seq = body.get("_seq", 0)
+        if seq <= self.panel._last_msg_seq:
+            return  # duplicate (e.g. also delivered via title fallback)
+        self.panel._last_msg_seq = seq
+        if body.get("action") != "drag_zone":   # too chatty to log
+            debug(f"Bridge message: {body}")
+        self.panel._on_bridge_message(body)
 
 
 # ---------------------------------------------------------------------------
@@ -1233,6 +1248,8 @@ class OverlayPanel:
             .replace("\n", "\\n")
             .replace("\r", "\\r")
             .replace("</", "<\\/")
+            .replace(" ", "\\u2028")   # JS line separators — legal in
+            .replace(" ", "\\u2029")   # Python strings, fatal in JS literals
         )
 
     # --- State transitions ---
@@ -1468,6 +1485,9 @@ class VoiceNotesApp(rumps.App):
         self._preview_cache = {}     # action key → processed content
         self._last_preview_content = None  # what's on the preview screen now
         self._last_process_body = None
+        self._paste_timer = None
+        self._paste_cancelled = False
+        self._recording_mode = "note"
 
         # Start hotkey listener — F1=dictation, F2=note
         start_hotkey_listener(self._hotkey_dictation, self._hotkey_note)
@@ -1533,6 +1553,18 @@ class VoiceNotesApp(rumps.App):
         overlay = self._ensure_overlay()
         overlay.hide()
 
+    def _capture_previous_app(self):
+        """Remember the frontmost app so dictation can restore focus before
+        pasting. Never capture ourselves (e.g. when recording starts from a
+        click inside the overlay) — pasting into our own webview is worse
+        than not pasting at all."""
+        from AppKit import NSWorkspace
+        front = NSWorkspace.sharedWorkspace().frontmostApplication()
+        if front is not None and front.processIdentifier() == os.getpid():
+            front = None
+        self._previous_app = front
+        debug(f"[voice-notes] Previous app: {front.bundleIdentifier() if front else 'none'}")
+
     # --- Hotkey ---
 
     def _hotkey_dictation(self):
@@ -1547,10 +1579,7 @@ class VoiceNotesApp(rumps.App):
 
         if self.state == AppState.IDLE:
             # Capture frontmost app BEFORE the overlay steals focus.
-            from AppKit import NSWorkspace
-            front = NSWorkspace.sharedWorkspace().frontmostApplication()
-            self._previous_app = front
-            debug(f"[voice-notes] Previous app: {front.bundleIdentifier() if front else 'none'}")
+            self._capture_previous_app()
 
             # Switch to the mode for this hotkey
             if force_mode and overlay.mode != force_mode:
@@ -1583,6 +1612,11 @@ class VoiceNotesApp(rumps.App):
     def toggle_from_overlay(self):
         debug(f"[voice-notes] Record toggle, state={self.state.value}")
         if self.state == AppState.IDLE:
+            # Same setup as the hotkey path so blob-tap dictation behaves
+            # identically (focus capture for the paste, pill for dictation).
+            overlay = self._ensure_overlay()
+            self._capture_previous_app()
+            overlay.set_compact(overlay.mode == "dictation")
             self.start_recording()
         elif self.state == AppState.RECORDING:
             self.stop_recording()
@@ -1597,6 +1631,11 @@ class VoiceNotesApp(rumps.App):
         debug(f"[voice-notes] Mode set to {mode}")
 
     def start_recording(self):
+        self._cancel_paste_timer()   # a stale countdown must never fire mid-take
+        overlay = self._ensure_overlay()
+        # Freeze the mode for this take: toggling the mode switch while
+        # transcribing must not reroute the result (note → surprise paste).
+        self._recording_mode = overlay.mode
         self.state = AppState.RECORDING
         try:
             self.recorder.start()
@@ -1658,7 +1697,7 @@ class VoiceNotesApp(rumps.App):
         self._auto_stop_timer.start()
 
         # Live captions while dictating (parakeet streaming only)
-        if overlay.mode == "dictation" and ENGINE == "parakeet":
+        if self._recording_mode == "dictation" and ENGINE == "parakeet":
             def on_text(text):
                 snippet = overlay._js_escape((text or "").strip())
                 self._schedule_ui(lambda: overlay._eval_js(f"setLiveTranscript('{snippet}')"))
@@ -1798,7 +1837,9 @@ class VoiceNotesApp(rumps.App):
                 self._transcript = transcript
                 overlay.transcript = transcript
 
-                if overlay.mode == "dictation":
+                # Route by the mode captured at recording start, not the live
+                # toggle — switching modes mid-transcription must not reroute.
+                if getattr(self, "_recording_mode", overlay.mode) == "dictation":
                     copy_to_clipboard(transcript)
                     self._schedule_ui(lambda: self._show_dictation_result(transcript))
                 else:
@@ -1845,7 +1886,11 @@ class VoiceNotesApp(rumps.App):
         self._paste_cancelled = False
 
         def do_paste():
-            if self._paste_cancelled:
+            # Guard on state as well as the flag: Done/discard/× or a new
+            # recording moves state off POST_RECORDING, and a stale timer
+            # must never paste into whatever is frontmost.
+            if self._paste_cancelled or self.state != AppState.POST_RECORDING:
+                debug("[voice-notes] Paste skipped (cancelled or state moved on)")
                 return
             self.state = AppState.IDLE
             overlay.hide()
@@ -1872,15 +1917,26 @@ class VoiceNotesApp(rumps.App):
         self.state = AppState.POST_RECORDING
         overlay.set_post_dictation(transcript)
         overlay._eval_js(f"startPasteCountdown({PASTE_PREVIEW_SECONDS})")
-        threading.Timer(
+        self._paste_timer = threading.Timer(
             PASTE_PREVIEW_SECONDS, lambda: self._schedule_ui(do_paste)
-        ).start()
+        )
+        self._paste_timer.start()
+
+    def _cancel_paste_timer(self):
+        self._paste_cancelled = True
+        timer = getattr(self, '_paste_timer', None)
+        self._paste_timer = None
+        if timer:
+            try:
+                timer.cancel()
+            except Exception:
+                pass
 
     def cancel_paste_from_overlay(self):
         """User hit Esc/Cancel during the paste countdown — keep the transcript
         on screen (and on the clipboard) but don't type it anywhere."""
         debug("[voice-notes] Paste cancelled by user")
-        self._paste_cancelled = True
+        self._cancel_paste_timer()
         # Expand from the pill to the full panel so the transcript is reviewable
         self._ensure_overlay().set_compact(False)
 
@@ -1895,13 +1951,17 @@ class VoiceNotesApp(rumps.App):
             # 1. Put text on clipboard
             copy_to_clipboard(text)
 
-            # 2. Restore focus to the app that was frontmost before the overlay
-            if prev_app:
-                from AppKit import NSApplicationActivateIgnoringOtherApps
-                prev_app.activateWithOptions_(NSApplicationActivateIgnoringOtherApps)
-                time.sleep(0.25)  # let the window manager transfer focus
-            else:
-                time.sleep(0.15)
+            # 2. Restore focus to the app that was frontmost before the overlay.
+            # If we never captured one, do NOT paste blind into whatever
+            # happens to be frontmost — leave it on the clipboard instead.
+            if not prev_app:
+                debug("[voice-notes] No previous app — skipping paste, clipboard only")
+                notify("Voice Notes", "Transcript copied",
+                       "No target window — press Cmd+V where you want it.")
+                return
+            from AppKit import NSApplicationActivateIgnoringOtherApps
+            prev_app.activateWithOptions_(NSApplicationActivateIgnoringOtherApps)
+            time.sleep(0.25)  # let the window manager transfer focus
 
             # 3. Paste via System Events. Under launchd, /usr/bin/osascript
             # itself must be granted Accessibility (error 1002 otherwise).
@@ -2183,6 +2243,7 @@ class VoiceNotesApp(rumps.App):
     def discard_from_overlay(self):
         """Handle discard message from the webview."""
         debug("[voice-notes] Discarding")
+        self._cancel_paste_timer()
         if self._wav_path:
             try:
                 os.unlink(self._wav_path)
@@ -2205,6 +2266,7 @@ class VoiceNotesApp(rumps.App):
     def done_from_overlay(self):
         """Handle done message from the webview (dictation mode)."""
         debug("[voice-notes] Done (dictation)")
+        self._cancel_paste_timer()
         self._ensure_overlay().set_compact(False)
         if self._wav_path:
             try:

@@ -705,6 +705,15 @@ var ACTION_SHORT = {
 var _msgSeq = 0;
 function send(action, data) {
   var msg = Object.assign({action: action, _seq: ++_msgSeq}, data || {});
+  // Primary: WKScriptMessageHandler — ordered, never coalesced.
+  try {
+    if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.bridge) {
+      window.webkit.messageHandlers.bridge.postMessage(msg);
+      return;
+    }
+  } catch (e) { /* fall through to title transport */ }
+  // Fallback (plain-browser testing): title changes observed via KVO.
+  // Rapid successive sends can coalesce here — acceptable for testing only.
   document.title = 'BRIDGE:' + JSON.stringify(msg);
 }
 
