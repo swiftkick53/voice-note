@@ -914,55 +914,71 @@ def parse_hotkey(hotkey_str):
     return modifiers, key
 
 
+_hotkey_listener = None
+
+
+def hotkey_for(which):
+    """Current combo string for 'dictation' or 'note'."""
+    defaults = {"dictation": "f1", "note": "f2"}
+    return CONFIG.get(f"hotkey_{which}", defaults[which]).lower()
+
+
 def start_hotkey_listener(dictation_callback, note_callback):
-    """Listen for F1 (dictation) and F2 (note) hotkeys.
+    """(Re)start the global hotkey listener from config.
 
-    Falls back to the legacy single-hotkey config if present so existing
-    users aren't broken. New default: F1=dictation, F2=note.
+    Config keys: hotkey_dictation (default f1), hotkey_note (default f2).
+    Combos support modifiers, e.g. "cmd+shift+d". Safe to call again to
+    apply a rebind live.
     """
+    global _hotkey_listener
     from pynput import keyboard
+    from pynput.keyboard import Key
 
-    # Build list of (modifiers, key, callback) tuples to watch
+    if _hotkey_listener is not None:
+        try:
+            _hotkey_listener.stop()
+        except Exception:
+            pass
+        _hotkey_listener = None
+
     bindings = []
-
-    # Check for legacy single-hotkey config — keep it working as note mode
-    legacy = CONFIG.get("hotkey", "")
-    if legacy and legacy.lower() not in ("f1", "f2"):
-        mods, k = parse_hotkey(legacy)
+    for which, cb in (("dictation", dictation_callback), ("note", note_callback)):
+        mods, k = parse_hotkey(hotkey_for(which))
         if k:
-            bindings.append((mods, k, note_callback))
-
-    # F1 → dictation, F2 → note (always registered)
-    _, f1 = parse_hotkey("f1")
-    _, f2 = parse_hotkey("f2")
-    if f1:
-        bindings.append((set(), f1, dictation_callback))
-    if f2:
-        bindings.append((set(), f2, note_callback))
+            bindings.append((mods, k, cb))
+        else:
+            debug(f"[voice-notes] Invalid hotkey for {which}: {hotkey_for(which)!r}")
 
     if not bindings:
-        print("Warning: no valid hotkeys configured.")
+        debug("[voice-notes] Warning: no valid hotkeys configured.")
         return
 
+    # Right-hand modifiers count as their generic siblings
+    normalize = {
+        Key.cmd_r: Key.cmd, Key.cmd_l: Key.cmd,
+        Key.ctrl_r: Key.ctrl, Key.ctrl_l: Key.ctrl,
+        Key.alt_r: Key.alt, Key.alt_l: Key.alt,
+        Key.shift_r: Key.shift, Key.shift_l: Key.shift,
+    }
     current_modifiers = set()
 
     def on_press(k):
-        from pynput.keyboard import Key
-        if k in (Key.cmd, Key.ctrl, Key.alt, Key.shift,
-                 Key.cmd_r, Key.ctrl_r, Key.alt_r, Key.shift_r):
-            current_modifiers.add(k)
+        norm = normalize.get(k, k)
+        if norm in (Key.cmd, Key.ctrl, Key.alt, Key.shift):
+            current_modifiers.add(norm)
+            return
         for mods, trigger, cb in bindings:
-            # Normalise cmd_l/cmd_r etc. for modifier check
-            required = mods
-            if current_modifiers >= required and k == trigger:
+            if k == trigger and current_modifiers == mods:
                 cb()
 
     def on_release(k):
-        current_modifiers.discard(k)
+        current_modifiers.discard(normalize.get(k, k))
 
     listener = keyboard.Listener(on_press=on_press, on_release=on_release)
     listener.daemon = True
     listener.start()
+    _hotkey_listener = listener
+    debug(f"[voice-notes] Hotkeys active: dictation={hotkey_for('dictation')}, note={hotkey_for('note')}")
 
 
 # ---------------------------------------------------------------------------
@@ -1314,6 +1330,9 @@ class OverlayPanel:
             self.app.choose_notes_folder_from_overlay()
         elif action == "set_engine":
             self.app.set_engine_from_overlay(body.get("engine", ""))
+        elif action == "set_hotkey":
+            self.app.set_hotkey_from_overlay(
+                body.get("which", ""), body.get("combo", ""))
         elif action == "cancel_recording":
             self.app.cancel_recording_from_overlay()
         elif action == "open_settings":
@@ -1373,7 +1392,7 @@ class OverlayPanel:
 
     def _apply_defaults(self):
         """Send config defaults to the webview."""
-        hotkey = self._js_escape(CONFIG.get("hotkey", "cmd+shift+r"))
+        hotkey = self._js_escape(hotkey_for("dictation"))
         self._eval_js(f"setHotkey('{hotkey}')")
         self._eval_js(f"setModeFromPython('{self.mode}')")
 
@@ -2514,7 +2533,8 @@ class VoiceNotesApp(rumps.App):
             "default_mode": CONFIG.get("default_mode", "note"),
             "default_action": CONFIG.get("default_action", "clean_format"),
             "copy_to_clipboard": CONFIG.get("copy_to_clipboard", False),
-            "hotkey": CONFIG.get("hotkey", "f1"),
+            "hotkey_dictation": hotkey_for("dictation"),
+            "hotkey_note": hotkey_for("note"),
             "whisper_model": WHISPER_MODEL,
             "engine": ENGINE,
             "active_model": ACTIVE_MODEL,
@@ -2581,6 +2601,30 @@ class VoiceNotesApp(rumps.App):
             ov = self._ensure_overlay()
             ov._eval_js(f"setEngineModel('{ov._js_escape(ACTIVE_MODEL)}')")
             ov._eval_js(f"showToast('✓ Engine: {engine}')")
+
+    def set_hotkey_from_overlay(self, which, combo):
+        ov = self._ensure_overlay()
+        combo = (combo or "").strip().lower()
+        if which not in ("dictation", "note"):
+            return
+        mods, key = parse_hotkey(combo)
+        if not key:
+            ov._eval_js("showToast('Unsupported key combo')")
+            self.send_settings()   # repaint the chip with the old value
+            return
+        other = "note" if which == "dictation" else "dictation"
+        if combo == hotkey_for(other):
+            ov._eval_js("showToast('Already used by the other hotkey')")
+            self.send_settings()
+            return
+        CONFIG[f"hotkey_{which}"] = combo
+        save_config(CONFIG)
+        # Rebind live
+        start_hotkey_listener(self._hotkey_dictation, self._hotkey_note)
+        self.send_settings()
+        ov._eval_js(f"setHotkey('{ov._js_escape(hotkey_for('dictation'))}')")
+        combo_e = ov._js_escape(combo.upper())
+        ov._eval_js(f"showToast('✓ {which.capitalize()} hotkey: {combo_e}')")
 
     def save_settings_from_overlay(self, body):
         """Apply-on-change: persist silently (the overlay shows its own toast).

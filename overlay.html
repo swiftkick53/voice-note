@@ -602,8 +602,12 @@ body.compact-mode #compact-strip {
         <input type="checkbox" id="set-clipboard-default" onchange="settingsChanged()"/>
       </div>
       <div class="set-row">
-        <span>Hotkeys</span>
-        <span class="val-mono">F1 dictation · F2 note</span>
+        <span>Dictation hotkey</span>
+        <span class="val-chip blue" id="hotkey-dictation-chip" onclick="captureHotkey('dictation')" style="cursor:pointer" title="Click, then press the new key combo">F1</span>
+      </div>
+      <div class="set-row">
+        <span>Note hotkey</span>
+        <span class="val-chip blue" id="hotkey-note-chip" onclick="captureHotkey('note')" style="cursor:pointer" title="Click, then press the new key combo">F2</span>
       </div>
     </div>
     <div class="set-group-label">Engine</div>
@@ -1286,6 +1290,7 @@ function setSettings(s) {
   });
   document.getElementById('default-action-label').textContent = ACTION_LABELS[defaultActionUI] || defaultActionUI;
   document.getElementById('set-clipboard-default').checked = !!s.copy_to_clipboard;
+  _paintHotkeyChips();
   document.getElementById('info-engine').textContent = s.engine || 'whisper';
   document.getElementById('info-model').textContent = s.active_model || s.whisper_model || '—';
   document.getElementById('info-sample').textContent = (s.sample_rate || 0) + ' Hz';
@@ -1309,6 +1314,47 @@ function cycleDefaultAction() {
   document.getElementById('default-action-label').textContent = ACTION_LABELS[defaultActionUI];
   settingsChanged();
 }
+
+var _hotkeyCapture = null;
+function captureHotkey(which) {
+  _hotkeyCapture = which;
+  document.getElementById('hotkey-' + which + '-chip').textContent = 'press keys… (esc cancels)';
+}
+function _paintHotkeyChips() {
+  var hd = document.getElementById('hotkey-dictation-chip');
+  var hn = document.getElementById('hotkey-note-chip');
+  if (hd) hd.textContent = (currentSettings.hotkey_dictation || 'f1').toUpperCase();
+  if (hn) hn.textContent = (currentSettings.hotkey_note || 'f2').toUpperCase();
+}
+function _hotkeyFromEvent(e) {
+  var c = e.code;
+  if (/^Key[A-Z]$/.test(c)) return c.slice(3).toLowerCase();
+  if (/^Digit\d$/.test(c)) return c.slice(5);
+  if (/^F\d{1,2}$/.test(c)) return c.toLowerCase();
+  if (c === 'Space') return 'space';
+  return null;
+}
+// Capture-phase listener so the app's own shortcuts don't react mid-capture
+document.addEventListener('keydown', function(e) {
+  if (!_hotkeyCapture) return;
+  e.preventDefault(); e.stopPropagation();
+  if (e.key === 'Escape') { _hotkeyCapture = null; _paintHotkeyChips(); return; }
+  if (['Shift', 'Control', 'Alt', 'Meta'].indexOf(e.key) >= 0) return;  // wait for the real key
+  var key = _hotkeyFromEvent(e);
+  var which = _hotkeyCapture;
+  if (!key) {
+    _hotkeyCapture = null; _paintHotkeyChips();
+    showToast('Unsupported key — use letters, digits, F-keys or space');
+    return;
+  }
+  var parts = [];
+  if (e.metaKey) parts.push('cmd');
+  if (e.ctrlKey) parts.push('ctrl');
+  if (e.altKey) parts.push('alt');
+  if (e.shiftKey) parts.push('shift');
+  _hotkeyCapture = null;
+  send('set_hotkey', {which: which, combo: parts.concat([key]).join('+')});
+}, true);
 
 function toggleEngine() {
   var next = (currentSettings.engine === 'parakeet') ? 'whisper' : 'parakeet';
