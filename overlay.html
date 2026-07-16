@@ -499,7 +499,7 @@ body.compact-mode #compact-strip {
   <div class="dock bordered" style="justify-content:flex-start;padding:0 20px">
     <span class="text-link" onclick="setState('post_note')">← Edit</span>
     <div class="spacer"></div>
-    <button class="pill" onclick="send('copy_preview')" style="margin-right:8px">Copy</button>
+    <button class="pill" onclick="send('copy_preview', _savePayload())" style="margin-right:8px">Copy</button>
     <button class="pill primary" onclick="doSaveProcessed()">Save to vault ⏎</button>
   </div>
 </div>

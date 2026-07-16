@@ -1466,6 +1466,7 @@ class VoiceNotesApp(rumps.App):
         self._auto_stop_timer = None
         self._live_caption = None
         self._preview_cache = {}     # action key → processed content
+        self._last_preview_content = None  # what's on the preview screen now
         self._last_process_body = None
 
         # Start hotkey listener — F1=dictation, F2=note
@@ -1827,6 +1828,7 @@ class VoiceNotesApp(rumps.App):
     def _show_post_recording(self):
         self.state = AppState.POST_RECORDING
         self._preview_cache = {}   # fresh transcript → fresh previews
+        self._last_preview_content = None
         self._set_icon(ICON_IDLE)
         self._ensure_overlay().set_post_note(
             transcript=self._transcript, duration=self._duration,
@@ -1967,6 +1969,7 @@ class VoiceNotesApp(rumps.App):
         cached = self._preview_cache.get(key)
         if cached is not None:
             debug(f"[voice-notes] Preview cache hit: {key}")
+            self._last_preview_content = cached
             self.state = AppState.PREVIEW
             overlay.push_preview(cached, action_type)
             return
@@ -1985,6 +1988,7 @@ class VoiceNotesApp(rumps.App):
 
             def on_done():
                 self._preview_cache[key] = content
+                self._last_preview_content = content
                 self.state = AppState.PREVIEW
                 self._set_icon(ICON_IDLE)
                 overlay.push_preview(content, action_type)
@@ -2034,6 +2038,7 @@ class VoiceNotesApp(rumps.App):
                     self._wav_path = None
                     self._last_save_body = None
                     self._preview_cache = {}
+                    self._last_preview_content = None
                     overlay.transcript = None
                     overlay.wav_path = None
                     overlay.suggested_title_text = None
@@ -2057,10 +2062,15 @@ class VoiceNotesApp(rumps.App):
         threading.Thread(target=process, daemon=True).start()
 
     def copy_preview_from_overlay(self, body):
-        content = self._preview_cache.get(self._preview_key(body))
+        # Prefer whatever is actually on the preview screen; the cache
+        # lookup is only a fallback (the button may send a stale payload).
+        content = getattr(self, "_last_preview_content", None) \
+            or self._preview_cache.get(self._preview_key(body))
         if content:
             copy_to_clipboard(content)
             self._ensure_overlay()._eval_js("showToast('✓ Copied to clipboard')")
+        else:
+            self._ensure_overlay()._eval_js("showToast('Nothing to copy yet')")
 
     # --- Save / discard (called from overlay JS messages) ---
 
@@ -2181,6 +2191,7 @@ class VoiceNotesApp(rumps.App):
         self._wav_path = None
         self._transcript = None
         self._preview_cache = {}
+        self._last_preview_content = None
         self.state = AppState.IDLE
         self._set_icon(ICON_IDLE)
         self._ensure_overlay().set_idle()
