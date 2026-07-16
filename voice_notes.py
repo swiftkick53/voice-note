@@ -915,6 +915,12 @@ def parse_hotkey(hotkey_str):
 
 
 _hotkey_listener = None
+# Mutated in place on rebind and read by the listener thread. The listener
+# itself is created exactly once: re-creating a pynput Listener while the
+# NSApplication run loop is live crashes the process (its thread queries the
+# keyboard layout via TIS, which macOS asserts must run on the main queue —
+# dispatch_assert_queue_fail / EXC_BREAKPOINT).
+_hotkey_bindings = []
 
 
 def hotkey_for(which):
@@ -923,33 +929,34 @@ def hotkey_for(which):
     return CONFIG.get(f"hotkey_{which}", defaults[which]).lower()
 
 
+def _rebuild_hotkey_bindings(dictation_callback, note_callback):
+    new = []
+    for which, cb in (("dictation", dictation_callback), ("note", note_callback)):
+        mods, k = parse_hotkey(hotkey_for(which))
+        if k:
+            new.append((mods, k, cb))
+        else:
+            debug(f"[voice-notes] Invalid hotkey for {which}: {hotkey_for(which)!r}")
+    _hotkey_bindings[:] = new   # atomic-enough swap for the reader thread
+    debug(f"[voice-notes] Hotkeys active: dictation={hotkey_for('dictation')}, note={hotkey_for('note')}")
+
+
 def start_hotkey_listener(dictation_callback, note_callback):
-    """(Re)start the global hotkey listener from config.
+    """Start (once) or live-rebind the global hotkey listener.
 
     Config keys: hotkey_dictation (default f1), hotkey_note (default f2).
-    Combos support modifiers, e.g. "cmd+shift+d". Safe to call again to
-    apply a rebind live.
+    Combos support modifiers, e.g. "cmd+shift+d". Subsequent calls only swap
+    the bindings — the listener is never re-created (see _hotkey_bindings).
     """
     global _hotkey_listener
     from pynput import keyboard
     from pynput.keyboard import Key
 
+    _rebuild_hotkey_bindings(dictation_callback, note_callback)
     if _hotkey_listener is not None:
-        try:
-            _hotkey_listener.stop()
-        except Exception:
-            pass
-        _hotkey_listener = None
+        return   # live rebind: bindings swapped, existing listener reused
 
-    bindings = []
-    for which, cb in (("dictation", dictation_callback), ("note", note_callback)):
-        mods, k = parse_hotkey(hotkey_for(which))
-        if k:
-            bindings.append((mods, k, cb))
-        else:
-            debug(f"[voice-notes] Invalid hotkey for {which}: {hotkey_for(which)!r}")
-
-    if not bindings:
+    if not _hotkey_bindings:
         debug("[voice-notes] Warning: no valid hotkeys configured.")
         return
 
@@ -967,7 +974,7 @@ def start_hotkey_listener(dictation_callback, note_callback):
         if norm in (Key.cmd, Key.ctrl, Key.alt, Key.shift):
             current_modifiers.add(norm)
             return
-        for mods, trigger, cb in bindings:
+        for mods, trigger, cb in list(_hotkey_bindings):   # live-rebindable
             if k == trigger and current_modifiers == mods:
                 cb()
 
@@ -978,7 +985,6 @@ def start_hotkey_listener(dictation_callback, note_callback):
     listener.daemon = True
     listener.start()
     _hotkey_listener = listener
-    debug(f"[voice-notes] Hotkeys active: dictation={hotkey_for('dictation')}, note={hotkey_for('note')}")
 
 
 # ---------------------------------------------------------------------------
