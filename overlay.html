@@ -477,7 +477,30 @@ body.compact-mode #compact-strip {
   <div class="dock bordered" style="justify-content:flex-start;padding:0 20px">
     <span class="text-link" onclick="confirmDiscard()">Discard</span>
     <div class="spacer"></div>
-    <button class="pill primary" onclick="doSave()">Process &amp; save ⏎</button>
+    <button class="pill primary" onclick="doProcess()">Preview ⏎</button>
+  </div>
+</div>
+
+<!-- ============ 4b · PREVIEW (hue 60) ============ -->
+<div class="screen hidden" id="screen-preview">
+  <div class="hd">
+    <div class="hd-cluster drag-spot">
+      <div class="dot" style="background:oklch(0.72 0.15 60)"></div>
+      <div class="hd-title">Preview</div>
+    </div>
+    <div class="spacer"></div>
+    <div class="hd-meta" id="preview-action-label">—</div>
+    <button class="win-x" onclick="send('close')" title="Hide">×</button>
+  </div>
+  <div class="stage" style="align-items:stretch;justify-content:flex-start;gap:10px;padding:2px 20px 10px;overflow:hidden">
+    <div class="chips" id="preview-chips" style="flex:none"></div>
+    <div class="well" id="preview-content" style="flex:1;overflow-y:auto;white-space:pre-wrap;user-select:text;-webkit-user-select:text;font-size:12.5px"></div>
+  </div>
+  <div class="dock bordered" style="justify-content:flex-start;padding:0 20px">
+    <span class="text-link" onclick="setState('post_note')">← Edit</span>
+    <div class="spacer"></div>
+    <button class="pill" onclick="send('copy_preview')" style="margin-right:8px">Copy</button>
+    <button class="pill primary" onclick="doSaveProcessed()">Save to vault ⏎</button>
   </div>
 </div>
 
@@ -512,7 +535,7 @@ body.compact-mode #compact-strip {
   <div class="hd">
     <div class="hd-cluster drag-spot">
       <div class="dot" style="background:oklch(0.72 0.15 160);animation:dotPulse 1.5s ease-in-out infinite"></div>
-      <div class="hd-title">Saving</div>
+      <div class="hd-title">Processing</div>
     </div>
     <div class="spacer"></div>
     <div class="hd-meta" style="color:oklch(0.66 0.04 160)">processing with Claude…</div>
@@ -687,7 +710,7 @@ function send(action, data) {
 
 // ============ BACKGROUND CROSSFADE ============
 var BG_FOR = {
-  idle: 'bg-amber', post_note: 'bg-amber', post_dictation: 'bg-amber',
+  idle: 'bg-amber', post_note: 'bg-amber', preview: 'bg-amber', post_dictation: 'bg-amber',
   recording: 'bg-red', transcribing: 'bg-cyan', saving: 'bg-green',
   error: 'bg-deepred', library: 'bg-quiet', settings: 'bg-blue'
 };
@@ -700,7 +723,7 @@ function setBg(key) {
 // ============ SCREENS ============
 var SCREEN_FOR = {
   idle: 'screen-idle', recording: 'screen-recording', transcribing: 'screen-transcribing',
-  post_note: 'screen-post-note', post_dictation: 'screen-post-dictation',
+  post_note: 'screen-post-note', preview: 'screen-preview', post_dictation: 'screen-post-dictation',
   saving: 'screen-saving', error: 'screen-error',
   library: 'screen-library', settings: 'screen-settings'
 };
@@ -956,22 +979,59 @@ function confirmDiscard() {
 function cancelDiscard() { document.getElementById('discard-modal').classList.add('hidden'); }
 function confirmDiscardYes() { cancelDiscard(); send('discard'); }
 
-// ============ SAVE ============
-function doSave() {
+// ============ PROCESS / PREVIEW / SAVE ============
+function _savePayload(actionKey) {
+  var titleEl = document.getElementById('title-input');
+  var clipEl = document.getElementById('clipboard-check');
+  var promptEl = document.getElementById('custom-prompt');
+  return {
+    title: titleEl ? titleEl.value : '',
+    actionType: actionKey || selectedAction,
+    project: currentProject || '',
+    copyClipboard: clipEl ? !!clipEl.checked : false,
+    customPrompt: promptEl ? promptEl.value : ''
+  };
+}
+
+function doProcess(actionKey) {
   try {
-    var titleEl = document.getElementById('title-input');
-    var clipEl = document.getElementById('clipboard-check');
-    var promptEl = document.getElementById('custom-prompt');
-    send('save', {
-      title: titleEl ? titleEl.value : '',
-      actionType: selectedAction,
-      project: currentProject || '',
-      copyClipboard: clipEl ? !!clipEl.checked : false,
-      customPrompt: promptEl ? promptEl.value : ''
-    });
+    send('process', _savePayload(actionKey));
   } catch (e) {
-    send('debug', {where: 'doSave-error', err: String(e && e.message || e)});
+    send('debug', {where: 'doProcess-error', err: String(e && e.message || e)});
   }
+}
+
+// Kept for compatibility: direct process-and-save without preview
+function doSave() { send('save', _savePayload()); }
+
+function doSaveProcessed() { send('save_processed', _savePayload()); }
+
+function setPreviewContent(data) {
+  // data: {content, action}
+  selectedAction = data.action || selectedAction;
+  buildChips();
+  document.getElementById('preview-content').textContent = data.content || '';
+  document.getElementById('preview-action-label').textContent =
+    (ACTION_LABELS[data.action] || data.action || '').replace(/^✦ /, '');
+  buildPreviewChips();
+  setState('preview');
+}
+
+function buildPreviewChips() {
+  var box = document.getElementById('preview-chips');
+  box.innerHTML = '';
+  var customPrompt = (document.getElementById('custom-prompt').value || '').trim();
+  Object.keys(ACTION_LABELS).forEach(function(k) {
+    if (k === 'custom' && !customPrompt) return;   // nothing to run without a prompt
+    var chip = document.createElement('span');
+    chip.className = 'chip' + (k === selectedAction ? ' selected' : '');
+    chip.textContent = ACTION_LABELS[k];
+    chip.onclick = function() {
+      if (k === selectedAction) return;
+      doProcess(k);   // python re-processes (or serves its cache) and pushes back
+    };
+    box.appendChild(chip);
+  });
 }
 
 // ============ POST-NOTE PREP ============
@@ -1269,7 +1329,9 @@ window.addEventListener('resize', reportDragZone);
 document.addEventListener('keydown', function(e) {
   if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
     e.preventDefault();
-    if (currentState === 'post_note' && currentPage === 'audio') doSave();
+    if (currentPage !== 'audio') return;
+    if (currentState === 'post_note') doProcess();
+    else if (currentState === 'preview') doSaveProcessed();
     return;
   }
   if ((e.metaKey || e.ctrlKey) && (e.key === '1' || e.key === '2')) {
@@ -1280,6 +1342,7 @@ document.addEventListener('keydown', function(e) {
   if (e.key === 'Escape') {
     if (!document.getElementById('discard-modal').classList.contains('hidden')) { cancelDiscard(); return; }
     if (currentPage !== 'audio') { navigate('audio'); return; }
+    if (currentState === 'preview') { setState('post_note'); return; }
     if (currentState === 'post_note') confirmDiscard();
     else if (currentState === 'post_dictation' && _pasteCountdownActive) cancelPaste();
     else if (currentState === 'post_dictation') send('done');
@@ -1288,8 +1351,12 @@ document.addEventListener('keydown', function(e) {
     else send('close');
     return;
   }
-  if (e.key === 'Enter' && currentState === 'post_note' && currentPage === 'audio') {
-    if (document.activeElement.tagName !== 'TEXTAREA') { e.preventDefault(); doSave(); }
+  if (e.key === 'Enter' && currentPage === 'audio') {
+    if (currentState === 'post_note' && document.activeElement.tagName !== 'TEXTAREA') {
+      e.preventDefault(); doProcess();
+    } else if (currentState === 'preview') {
+      e.preventDefault(); doSaveProcessed();
+    }
     return;
   }
   var tag = document.activeElement.tagName;

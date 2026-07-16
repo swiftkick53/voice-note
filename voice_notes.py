@@ -87,6 +87,7 @@ class AppState(Enum):
     RECORDING = "recording"
     TRANSCRIBING = "transcribing"
     POST_RECORDING = "post_recording"
+    PREVIEW = "preview"
     SAVING = "saving"
 
 
@@ -1144,6 +1145,12 @@ class OverlayPanel:
             self.app.toggle_from_overlay()
         elif action == "save":
             self.app.save_from_overlay(body)
+        elif action == "process":
+            self.app.process_from_overlay(body)
+        elif action == "save_processed":
+            self.app.save_processed_from_overlay(body)
+        elif action == "copy_preview":
+            self.app.copy_preview_from_overlay(body)
         elif action == "discard":
             self.app.discard_from_overlay()
         elif action == "mode":
@@ -1362,6 +1369,10 @@ class OverlayPanel:
         escaped = self._js_escape(title)
         self._eval_js(f"updateTitleSuggestion('{escaped}')")
 
+    def push_preview(self, content, action):
+        data = json.dumps({"content": content, "action": action})
+        self._eval_js(f"setPreviewContent({data})")
+
 
 # ---------------------------------------------------------------------------
 # Menu bar app
@@ -1454,6 +1465,8 @@ class VoiceNotesApp(rumps.App):
         self._last_save_body = None  # for retry
         self._auto_stop_timer = None
         self._live_caption = None
+        self._preview_cache = {}     # action key → processed content
+        self._last_process_body = None
 
         # Start hotkey listener — F1=dictation, F2=note
         start_hotkey_listener(self._hotkey_dictation, self._hotkey_note)
@@ -1813,6 +1826,7 @@ class VoiceNotesApp(rumps.App):
 
     def _show_post_recording(self):
         self.state = AppState.POST_RECORDING
+        self._preview_cache = {}   # fresh transcript → fresh previews
         self._set_icon(ICON_IDLE)
         self._ensure_overlay().set_post_note(
             transcript=self._transcript, duration=self._duration,
@@ -1911,6 +1925,142 @@ class VoiceNotesApp(rumps.App):
         if title:
             debug(f"[voice-notes] Title suggestion: {title}")
             self._schedule_ui(lambda: self._ensure_overlay().update_title_suggestion(title))
+
+    # --- Preview (process without saving) ---
+
+    @staticmethod
+    def _preview_key(body):
+        action = body.get("actionType", "clean_format")
+        custom = (body.get("customPrompt") or "").strip()
+        return f"{action}|{custom}" if action == "custom" and custom else action
+
+    def process_from_overlay(self, body):
+        """Run the selected action through Claude and preview the result —
+        nothing is written to the vault until save_processed."""
+        self._last_process_body = body
+        overlay = self._ensure_overlay()
+
+        def after_fetch(result, error):
+            edited = result if isinstance(result, str) else None
+            if error:
+                debug(f"[voice-notes] Transcript fetch error: {error}")
+            self._run_process(body, edited)
+
+        overlay.webview.evaluateJavaScript_completionHandler_(
+            "(function(){var t=document.getElementById('transcript-edit');"
+            "return t ? t.value : '';})()",
+            after_fetch,
+        )
+
+    def _run_process(self, body, edited_transcript):
+        action_type = body.get("actionType", "clean_format")
+        project = body.get("project", "") or None
+        custom_prompt = body.get("customPrompt", "") or None
+        overlay = self._ensure_overlay()
+
+        if edited_transcript and edited_transcript.strip():
+            if edited_transcript.strip() != (self._transcript or ""):
+                self._preview_cache = {}   # transcript edited → previews stale
+            self._transcript = edited_transcript.strip()
+
+        key = self._preview_key(body)
+        cached = self._preview_cache.get(key)
+        if cached is not None:
+            debug(f"[voice-notes] Preview cache hit: {key}")
+            self.state = AppState.PREVIEW
+            overlay.push_preview(cached, action_type)
+            return
+
+        self.state = AppState.SAVING          # reuse the processing screen
+        self._set_icon(ICON_PROCESSING)
+        overlay.set_saving()
+        transcript = self._transcript
+        debug(f"[voice-notes] Processing preview: action={action_type}, tlen={len(transcript or '')}")
+
+        def process():
+            content = process_with_claude(
+                transcript, action=action_type, project=project,
+                custom_prompt=custom_prompt,
+            )
+
+            def on_done():
+                self._preview_cache[key] = content
+                self.state = AppState.PREVIEW
+                self._set_icon(ICON_IDLE)
+                overlay.push_preview(content, action_type)
+
+            self._schedule_ui(on_done)
+
+        threading.Thread(target=process, daemon=True).start()
+
+    def save_processed_from_overlay(self, body):
+        """Commit the previewed content to the vault (no re-processing)."""
+        content = self._preview_cache.get(self._preview_key(body))
+        if content is None:
+            # No preview for this action (shouldn't happen) — full pipeline
+            self.save_from_overlay(body)
+            return
+
+        title = body.get("title", "").strip() or None
+        if not title:
+            title = self._ensure_overlay().suggested_title_text
+        copy_clip = body.get("copyClipboard", False)
+        CONFIG["copy_to_clipboard"] = copy_clip
+        save_config(CONFIG)
+        if copy_clip:
+            copy_to_clipboard(content)
+
+        self.state = AppState.SAVING
+        self._set_icon(ICON_PROCESSING)
+        overlay = self._ensure_overlay()
+        overlay.set_saving()
+        duration = self._duration
+        wav_path = self._wav_path
+
+        def process():
+            try:
+                note_title = save_note(content, duration, title=title)
+                debug(f"[voice-notes] Saved (from preview): {note_title}")
+                if wav_path:
+                    try:
+                        os.unlink(wav_path)
+                    except OSError:
+                        pass
+
+                def on_success():
+                    self.state = AppState.IDLE
+                    self._set_icon(ICON_IDLE)
+                    self._transcript = None
+                    self._wav_path = None
+                    self._last_save_body = None
+                    self._preview_cache = {}
+                    overlay.transcript = None
+                    overlay.wav_path = None
+                    overlay.suggested_title_text = None
+                    overlay.set_idle()
+                    title_e = overlay._js_escape(note_title)
+                    overlay._eval_js(f"showToast('✓ Saved — {title_e}', '{title_e}.md')")
+                    notify("Voice Notes", "Note saved!", note_title)
+
+                self._schedule_ui(on_success)
+            except Exception as e:
+                import traceback
+                debug(f"[voice-notes] Save error: {traceback.format_exc()}")
+
+                def on_error():
+                    self.state = AppState.PREVIEW
+                    self._set_icon(ICON_IDLE)
+                    overlay.push_error("Save failed", str(e))
+
+                self._schedule_ui(on_error)
+
+        threading.Thread(target=process, daemon=True).start()
+
+    def copy_preview_from_overlay(self, body):
+        content = self._preview_cache.get(self._preview_key(body))
+        if content:
+            copy_to_clipboard(content)
+            self._ensure_overlay()._eval_js("showToast('✓ Copied to clipboard')")
 
     # --- Save / discard (called from overlay JS messages) ---
 
@@ -2030,6 +2180,7 @@ class VoiceNotesApp(rumps.App):
                 pass
         self._wav_path = None
         self._transcript = None
+        self._preview_cache = {}
         self.state = AppState.IDLE
         self._set_icon(ICON_IDLE)
         self._ensure_overlay().set_idle()
@@ -2126,7 +2277,9 @@ class VoiceNotesApp(rumps.App):
     # --- Retry ---
 
     def retry_from_overlay(self):
-        if self._last_save_body and self._transcript:
+        if self._last_process_body and self._transcript:
+            self.process_from_overlay(self._last_process_body)
+        elif self._last_save_body and self._transcript:
             self.save_from_overlay(self._last_save_body)
         else:
             self._ensure_overlay().set_idle()
