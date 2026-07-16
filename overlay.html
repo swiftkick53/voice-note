@@ -497,7 +497,7 @@ body.compact-mode #compact-strip {
     <div class="well" id="preview-content" style="flex:1;overflow-y:auto;white-space:pre-wrap;user-select:text;-webkit-user-select:text;font-size:12.5px"></div>
   </div>
   <div class="dock bordered" style="justify-content:flex-start;padding:0 20px">
-    <span class="text-link" onclick="setState('post_note')">← Edit</span>
+    <span class="text-link" onclick="backToEdit()">← Edit</span>
     <div class="spacer"></div>
     <button class="pill" onclick="send('copy_preview', _savePayload())" style="margin-right:8px">Copy</button>
     <button class="pill primary" onclick="doSaveProcessed()">Save to vault ⏎</button>
@@ -1015,6 +1015,11 @@ function doSave() { send('save', _savePayload()); }
 
 function doSaveProcessed() { send('save_processed', _savePayload()); }
 
+function backToEdit() {
+  setState('post_note');
+  send('back_to_edit');   // keep the Python state machine in sync
+}
+
 function setPreviewContent(data) {
   // data: {content, action}
   selectedAction = data.action || selectedAction;
@@ -1351,7 +1356,7 @@ document.addEventListener('keydown', function(e) {
   if (e.key === 'Escape') {
     if (!document.getElementById('discard-modal').classList.contains('hidden')) { cancelDiscard(); return; }
     if (currentPage !== 'audio') { navigate('audio'); return; }
-    if (currentState === 'preview') { setState('post_note'); return; }
+    if (currentState === 'preview') { backToEdit(); return; }
     if (currentState === 'post_note') confirmDiscard();
     else if (currentState === 'post_dictation' && _pasteCountdownActive) cancelPaste();
     else if (currentState === 'post_dictation') send('done');

@@ -344,6 +344,7 @@ class Recorder:
         audio_data = np.concatenate(frames, axis=0)
 
         tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False, prefix="voice_note_")
+        tmp.close()   # sf.write opens its own handle; don't leak this fd
         sf.write(tmp.name, audio_data, self.sample_rate)
         return tmp.name, int(duration)
 
@@ -356,6 +357,10 @@ _whisper_loaded = False
 # MLX can't run two transcriptions at once (each would load its own copy of
 # the model); serialize all calls — including the startup pre-warm.
 _whisper_lock = threading.Lock()
+# Set when a transcription worker times out while holding _whisper_lock: the
+# abandoned thread may never release it, so every later transcription would
+# block forever. Fail fast with a clear message instead of pretending.
+_engine_poisoned = False
 
 
 _parakeet_model = None
@@ -415,6 +420,12 @@ def _transcribe_parakeet(wav_path):
 def transcribe(wav_path):
     global _whisper_loaded
 
+    if _engine_poisoned:
+        raise RuntimeError(
+            "The transcription engine hung earlier and can't recover in-place. "
+            "Quit Voice Notes from the menu bar and reopen it."
+        )
+
     if not _whisper_loaded:
         notify("Voice Notes", f"Loading {ENGINE} model...",
                "First transcription may take a moment.")
@@ -426,6 +437,14 @@ def transcribe(wav_path):
                 return _transcribe_parakeet(wav_path)
             except Exception as exc:
                 debug(f"[voice-notes] Parakeet failed, falling back to Whisper: {exc!r}")
+                # The offline flag is keyed on the parakeet cache — if Whisper
+                # was never downloaded, lift it for this fallback download.
+                whisper_cache = Path(os.path.expanduser("~/.cache/huggingface/hub")) / (
+                    "models--" + WHISPER_MODEL.replace("/", "--")
+                )
+                if not whisper_cache.exists() and os.environ.get("HF_HUB_OFFLINE"):
+                    os.environ.pop("HF_HUB_OFFLINE", None)
+                    debug("[voice-notes] Lifted HF_HUB_OFFLINE for Whisper fallback download")
         return _transcribe_whisper(_load_wav_mono_16k(wav_path))
 
 
@@ -469,6 +488,9 @@ class LiveCaption:
 
     def _run(self):
         global _parakeet_model
+        if _engine_poisoned:
+            debug("[voice-notes] Live captions skipped — engine poisoned")
+            return
         try:
             import numpy as np
             import mlx.core as mx
@@ -518,13 +540,15 @@ def process_with_claude(transcript, action="clean_format", project=None, custom_
     # Resolve claude CLI to an absolute path so launchd-spawned contexts
     # (where PATH may be minimal) still find it.
     claude_bin = shutil.which("claude") or os.path.expanduser("~/.local/bin/claude")
-    cmd = [claude_bin, "-p", prompt]
+    # Prompt goes on stdin: multi-hour transcripts can exceed ARG_MAX as argv.
+    cmd = [claude_bin, "-p"]
     if project:
         cmd.extend(["--project", project])
 
     def _run(cmd):
         return subprocess.run(
-            cmd, capture_output=True, text=True, timeout=300, cwd=str(VAULT),
+            cmd, input=prompt, capture_output=True, text=True,
+            timeout=300, cwd=str(VAULT),
         )
 
     try:
@@ -563,7 +587,7 @@ def suggest_title(transcript):
     claude_bin = shutil.which("claude") or os.path.expanduser("~/.local/bin/claude")
     try:
         result = subprocess.run(
-            [claude_bin, "-p", prompt],
+            [claude_bin, "-p"], input=prompt,
             capture_output=True, text=True, timeout=60, cwd=str(VAULT),
         )
         if result.returncode == 0 and result.stdout.strip():
@@ -616,9 +640,13 @@ class AudioPlayer:
             return False
 
         if on_finish:
+            proc = self.proc   # capture: self.proc may be swapped/None'd by stop()
+
             def watch():
-                self.proc.wait()
-                on_finish()
+                proc.wait()
+                # Only report finish if we're still the active playback
+                if self.proc is proc:
+                    on_finish()
             threading.Thread(target=watch, daemon=True).start()
         return True
 
@@ -1213,6 +1241,10 @@ class OverlayPanel:
                 pass
         elif action == "cancel_paste":
             self.app.cancel_paste_from_overlay()
+        elif action == "back_to_edit":
+            # UI went preview → editor; mirror it in the Python state machine
+            if self.app.state == AppState.PREVIEW:
+                self.app.state = AppState.POST_RECORDING
         elif action == "cancel_recording":
             self.app.cancel_recording_from_overlay()
         elif action == "open_settings":
@@ -1276,11 +1308,13 @@ class OverlayPanel:
         self._eval_js(f"setHotkey('{hotkey}')")
         self._eval_js(f"setModeFromPython('{self.mode}')")
 
-        default_action = CONFIG.get("default_action", "clean_format")
-        self._eval_js(f"setDefaultAction('{default_action}')")
-
-        clipboard = "true" if CONFIG.get("copy_to_clipboard", False) else "false"
-        self._eval_js(f"setClipboardDefault({clipboard})")
+        # Don't clobber an in-progress note's action/clipboard choices when
+        # the overlay is merely re-shown mid-flow.
+        if self.app.state not in (AppState.POST_RECORDING, AppState.PREVIEW):
+            default_action = CONFIG.get("default_action", "clean_format")
+            self._eval_js(f"setDefaultAction('{default_action}')")
+            clipboard = "true" if CONFIG.get("copy_to_clipboard", False) else "false"
+            self._eval_js(f"setClipboardDefault({clipboard})")
 
         projects = CONFIG.get("projects", [{"name": "Default", "flag": None}])
         projects_json = json.dumps(projects)
@@ -1488,6 +1522,7 @@ class VoiceNotesApp(rumps.App):
         self._paste_timer = None
         self._paste_cancelled = False
         self._recording_mode = "note"
+        self._note_gen = 0   # increments per take; gates async title suggestions
 
         # Start hotkey listener — F1=dictation, F2=note
         start_hotkey_listener(self._hotkey_dictation, self._hotkey_note)
@@ -1763,6 +1798,7 @@ class VoiceNotesApp(rumps.App):
         wav_path, duration = self.recorder.stop()
         self._set_icon(ICON_PROCESSING)
         self.state = AppState.TRANSCRIBING
+        self._note_gen += 1   # invalidates any in-flight title suggestion
 
         overlay = self._ensure_overlay()
 
@@ -1770,6 +1806,11 @@ class VoiceNotesApp(rumps.App):
             self.state = AppState.IDLE
             self._set_icon(ICON_IDLE)
             overlay.set_idle()
+            if wav_path:
+                try:
+                    os.unlink(wav_path)
+                except OSError:
+                    pass
             notify("Voice Notes", "Too short", "Recording was too short to process.")
             return
 
@@ -1779,14 +1820,26 @@ class VoiceNotesApp(rumps.App):
             overlay.set_idle()
             mins = int(duration // 60)
             limit = MAX_TRANSCRIBE_SECONDS // 60
+            # Deliberately keep the WAV — it's the user's only copy. The
+            # startup sweep reclaims it after 24h if they don't act.
             overlay.push_error(
                 "Recording Too Long",
-                f"Recording was {mins} min — max is {limit} min. "
-                "Use F1/F2 to stop sooner, or increase max_transcribe_seconds in config.json."
+                f"Recording was {mins} min — max is {limit} min. The audio is "
+                f"kept for 24h at: {wav_path}. Increase max_transcribe_seconds "
+                "in config.json and use Retry to transcribe it."
             )
+            self._wav_path = wav_path
+            self._duration = duration
             debug(f"[voice-notes] Refusing to transcribe {duration}s recording (limit={MAX_TRANSCRIBE_SECONDS}s)")
             return
 
+        self._start_transcription(wav_path, duration)
+
+    def _start_transcription(self, wav_path, duration):
+        """Kick off (or retry) transcription of a finished recording."""
+        overlay = self._ensure_overlay()
+        self.state = AppState.TRANSCRIBING
+        self._set_icon(ICON_PROCESSING)
         self._wav_path = wav_path
         self._duration = duration
         overlay.wav_path = wav_path
@@ -1819,11 +1872,14 @@ class VoiceNotesApp(rumps.App):
                 try:
                     transcript = future.result(timeout=transcribe_timeout)
                 except concurrent.futures.TimeoutError:
+                    global _engine_poisoned
+                    _engine_poisoned = True   # abandoned worker still holds the lock
                     ex.shutdown(wait=False)
-                    debug(f"[voice-notes] Transcription timed out after {transcribe_timeout}s")
+                    debug(f"[voice-notes] Transcription timed out after {transcribe_timeout}s — engine poisoned")
                     self._schedule_ui(lambda: self._transcription_error(
-                        f"Transcription timed out ({transcribe_timeout}s). "
-                        "Try a shorter recording."
+                        f"Transcription hung ({transcribe_timeout}s). "
+                        "Quit Voice Notes from the menu bar and reopen it — "
+                        "your recording is kept and Retry will re-run it."
                     ))
                     return
                 ex.shutdown(wait=False)
@@ -1845,7 +1901,8 @@ class VoiceNotesApp(rumps.App):
                 else:
                     self._schedule_ui(self._show_post_recording)
                     threading.Thread(
-                        target=self._suggest_title, args=(transcript,), daemon=True,
+                        target=self._suggest_title,
+                        args=(transcript, self._note_gen), daemon=True,
                     ).start()
 
             except Exception as e:
@@ -1982,11 +2039,21 @@ class VoiceNotesApp(rumps.App):
         except Exception as exc:
             debug(f"[voice-notes] _type_at_cursor error: {exc!r}")
 
-    def _suggest_title(self, transcript):
+    def _suggest_title(self, transcript, gen):
         title = suggest_title(transcript)
-        if title:
+        if not title:
+            return
+
+        def apply():
+            # A slow suggestion for note A must never attach to note B —
+            # only apply if we're still on the same recording generation.
+            if gen != self._note_gen:
+                debug(f"[voice-notes] Dropping stale title suggestion: {title}")
+                return
             debug(f"[voice-notes] Title suggestion: {title}")
-            self._schedule_ui(lambda: self._ensure_overlay().update_title_suggestion(title))
+            self._ensure_overlay().update_title_suggestion(title)
+
+        self._schedule_ui(apply)
 
     # --- Preview (process without saving) ---
 
@@ -2015,6 +2082,9 @@ class VoiceNotesApp(rumps.App):
         )
 
     def _run_process(self, body, edited_transcript):
+        if self.state == AppState.SAVING:
+            debug("[voice-notes] Process request ignored — already processing")
+            return
         action_type = body.get("actionType", "clean_format")
         project = body.get("project", "") or None
         custom_prompt = body.get("customPrompt", "") or None
@@ -2097,6 +2167,8 @@ class VoiceNotesApp(rumps.App):
                     self._transcript = None
                     self._wav_path = None
                     self._last_save_body = None
+                    self._last_process_body = None
+                    self._note_gen += 1   # invalidate in-flight suggestions
                     self._preview_cache = {}
                     self._last_preview_content = None
                     overlay.transcript = None
@@ -2158,6 +2230,9 @@ class VoiceNotesApp(rumps.App):
         )
 
     def _run_save(self, body, edited_transcript):
+        if self.state == AppState.SAVING:
+            debug("[voice-notes] Save request ignored — already saving")
+            return
         title = body.get("title", "").strip() or None
         if not title:
             title = self._ensure_overlay().suggested_title_text
@@ -2168,6 +2243,13 @@ class VoiceNotesApp(rumps.App):
 
         if edited_transcript and edited_transcript.strip():
             self._transcript = edited_transcript.strip()
+
+        if not self._transcript:
+            # e.g. a save message racing a discard — nothing to save
+            debug("[voice-notes] Save ignored — no transcript")
+            self.state = AppState.IDLE
+            self._ensure_overlay().set_idle()
+            return
 
         # Persist clipboard preference
         CONFIG["copy_to_clipboard"] = copy_clip
@@ -2212,6 +2294,10 @@ class VoiceNotesApp(rumps.App):
                     self._transcript = None
                     self._wav_path = None
                     self._last_save_body = None
+                    self._last_process_body = None
+                    self._note_gen += 1   # invalidate in-flight suggestions
+                    self._preview_cache = {}
+                    self._last_preview_content = None
                     overlay = self._ensure_overlay()
                     overlay.transcript = None
                     overlay.wav_path = None
@@ -2242,7 +2328,14 @@ class VoiceNotesApp(rumps.App):
 
     def discard_from_overlay(self):
         """Handle discard message from the webview."""
+        if self.state == AppState.SAVING:
+            # A save worker is mid-flight and will complete regardless —
+            # honoring the discard would lie to the user about the outcome.
+            debug("[voice-notes] Discard ignored during SAVING")
+            return
         debug("[voice-notes] Discarding")
+        self._note_gen += 1          # drop any in-flight title suggestion
+        self._last_process_body = None
         self._cancel_paste_timer()
         if self._wav_path:
             try:
@@ -2354,6 +2447,10 @@ class VoiceNotesApp(rumps.App):
             self.process_from_overlay(self._last_process_body)
         elif self._last_save_body and self._transcript:
             self.save_from_overlay(self._last_save_body)
+        elif self._wav_path and not self._transcript and not _engine_poisoned:
+            # Transcription failed (or was refused) — re-run it on the kept WAV
+            debug("[voice-notes] Retry: re-running transcription")
+            self._start_transcription(self._wav_path, self._duration)
         else:
             self._ensure_overlay().set_idle()
             self.state = AppState.IDLE
