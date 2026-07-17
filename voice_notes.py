@@ -156,6 +156,12 @@ MAX_TRANSCRIBE_SECONDS = CONFIG.get("max_transcribe_seconds", 7200)
 # Dictation shows the transcript for this long (with Esc-to-cancel) before
 # pasting at the cursor. 0 = paste immediately with no preview.
 PASTE_PREVIEW_SECONDS = CONFIG.get("paste_preview_seconds", 1.5)
+# Dictation reuses the live-caption stream's final text instead of
+# re-transcribing the whole file after stop (near-instant finish).
+DICTATION_FAST_FINISH = CONFIG.get("dictation_fast_finish", True)
+# Start processing the default action as soon as a note's transcript is
+# ready, so Preview is usually already cached when clicked.
+SPECULATIVE_PROCESSING = CONFIG.get("speculative_processing", True)
 NOTES_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -503,6 +509,29 @@ def transcribe(wav_path):
 # the first-run timeout already includes +300s headroom for the load.
 
 
+def warm_engine_async():
+    """Load the parakeet model in a background thread (started from a
+    recording-start context, the same proven-safe pattern LiveCaption uses —
+    NOT from app init, which deadlocks; see the note above)."""
+    global _parakeet_model, _whisper_loaded
+    if ENGINE != "parakeet" or _engine_poisoned or _parakeet_model is not None:
+        return
+
+    def work():
+        global _parakeet_model, _whisper_loaded
+        try:
+            from parakeet_mlx import from_pretrained
+            with _whisper_lock:
+                if _parakeet_model is None:
+                    _parakeet_model = from_pretrained(PARAKEET_MODEL)
+                    debug("[voice-notes] Engine warmed during recording")
+            _whisper_loaded = True
+        except Exception as exc:
+            debug(f"[voice-notes] Engine warm failed: {exc!r}")
+
+    threading.Thread(target=work, daemon=True).start()
+
+
 class LiveCaption:
     """Live captions during dictation via parakeet-mlx's streaming API.
 
@@ -518,6 +547,15 @@ class LiveCaption:
         self._q = queue.Queue()
         self._stop = False
         self._thread = None
+        self.final_text = None          # set once the stream fully drains
+        self._done = threading.Event()
+
+    def wait_result(self, timeout=15):
+        """Block until the stream drains (or timeout); return its final text.
+        Lets dictation reuse the already-streamed transcription instead of
+        re-transcribing the whole file after stop."""
+        self._done.wait(timeout)
+        return self.final_text
 
     def start(self):
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -566,9 +604,13 @@ class LiveCaption:
                                 last_emit = now
                     if buf:
                         stream.add_audio(mx.array(np.concatenate(buf)))
-                    self._on_text(stream.result.text)
+                    final = stream.result.text
+                    self._on_text(final)
+                    self.final_text = final
         except Exception as exc:
             debug(f"[voice-notes] Live caption error: {exc!r}")
+        finally:
+            self._done.set()
 
 
 # ---------------------------------------------------------------------------
@@ -1616,6 +1658,9 @@ class VoiceNotesApp(rumps.App):
         self._paste_cancelled = False
         self._recording_mode = "note"
         self._note_gen = 0   # increments per take; gates async title suggestions
+        self._preview_inflight = set()      # actions being speculatively processed
+        self._pending_preview_body = None   # user clicked Preview while inflight
+        self._finishing_caption = None      # drained stream for fast dictation finish
 
         # Start hotkey listener — F1=dictation, F2=note
         start_hotkey_listener(self._hotkey_dictation, self._hotkey_note)
@@ -1824,6 +1869,12 @@ class VoiceNotesApp(rumps.App):
         self._auto_stop_timer = rumps.Timer(_remind, reminder_secs)
         self._auto_stop_timer.start()
 
+        # Note mode: warm the model while the user is still talking so the
+        # first transcription of the day doesn't stall at stop. (Dictation
+        # warms it through the live-caption stream below.)
+        if self._recording_mode == "note":
+            warm_engine_async()
+
         # Live captions while dictating (parakeet streaming only)
         if self._recording_mode == "dictation" and ENGINE == "parakeet":
             def on_text(text):
@@ -1866,10 +1917,12 @@ class VoiceNotesApp(rumps.App):
     def _teardown_live_caption(self):
         """Detach the mic tap and let the caption worker drain on its own
         thread (it holds _whisper_lock until done, which naturally serializes
-        it before the final transcription)."""
+        it before the final transcription). Keeps a reference so dictation
+        can reuse the stream's final text (see wait_result)."""
         self.recorder.tap = None
         lc = getattr(self, '_live_caption', None)
         self._live_caption = None
+        self._finishing_caption = lc
         if lc:
             threading.Thread(target=lc.stop, daemon=True).start()
 
@@ -1957,6 +2010,23 @@ class VoiceNotesApp(rumps.App):
             import concurrent.futures
             debug(f"[voice-notes] Transcribing (timeout={transcribe_timeout}s)…")
             try:
+                # Fast path: dictation already transcribed everything through
+                # the live-caption stream — reuse its final text instead of
+                # re-transcribing the whole file.
+                lc = getattr(self, '_finishing_caption', None)
+                self._finishing_caption = None
+                if (lc is not None and DICTATION_FAST_FINISH
+                        and getattr(self, "_recording_mode", None) == "dictation"):
+                    stream_text = lc.wait_result(timeout=15)
+                    if stream_text and stream_text.strip():
+                        transcript = stream_text.strip()
+                        debug(f"[voice-notes] Using live-stream transcript ({len(transcript)} chars)")
+                        self._transcript = transcript
+                        overlay.transcript = transcript
+                        copy_to_clipboard(transcript)
+                        self._schedule_ui(lambda: self._show_dictation_result(transcript))
+                        return
+
                 # No `with` block: context-manager exit calls shutdown(wait=True),
                 # which would block on the still-running transcribe and defeat
                 # the timeout. shutdown(wait=False) abandons the worker instead.
@@ -2021,6 +2091,8 @@ class VoiceNotesApp(rumps.App):
         self._preview_cache = {}   # fresh transcript → fresh previews
         self._last_preview_content = None
         self._set_icon(ICON_IDLE)
+        if SPECULATIVE_PROCESSING:
+            self._prewarm_default_preview()
         self._ensure_overlay().set_post_note(
             transcript=self._transcript, duration=self._duration,
         )
@@ -2166,6 +2238,49 @@ class VoiceNotesApp(rumps.App):
 
     # --- Preview (process without saving) ---
 
+    def _prewarm_default_preview(self):
+        """Start processing the default action in the background the moment a
+        note's transcript is ready — by the time the user reads the transcript
+        and clicks Preview, the result is usually already cached."""
+        action = CONFIG.get("default_action", "clean_format")
+        if action == "custom":
+            return
+        transcript = self._transcript
+        if not transcript:
+            return
+        key = action
+        gen = self._note_gen
+        self._preview_inflight.add(key)
+        debug(f"[voice-notes] Speculative processing started: {key}")
+
+        def work():
+            content = process_with_claude(transcript, action=action)
+
+            def apply():
+                self._preview_inflight.discard(key)
+                fresh = (gen == self._note_gen) and (transcript == (self._transcript or ""))
+                if fresh:
+                    self._preview_cache[key] = content
+                    debug(f"[voice-notes] Speculative preview ready: {key}")
+                # If the user already clicked Preview for this action, we're
+                # showing the processing screen — deliver (or redo if stale).
+                body = self._pending_preview_body
+                if body is not None and self._preview_key(body) == key:
+                    self._pending_preview_body = None
+                    if fresh:
+                        self._last_preview_content = content
+                        self.state = AppState.PREVIEW
+                        self._set_icon(ICON_IDLE)
+                        self._ensure_overlay().push_preview(content, key)
+                    else:
+                        # transcript was edited under us — process for real
+                        self.state = AppState.POST_RECORDING
+                        self._run_process(body, None)
+
+            self._schedule_ui(apply)
+
+        threading.Thread(target=work, daemon=True).start()
+
     @staticmethod
     def _preview_key(body):
         action = body.get("actionType", "clean_format")
@@ -2211,6 +2326,16 @@ class VoiceNotesApp(rumps.App):
             self._last_preview_content = cached
             self.state = AppState.PREVIEW
             overlay.push_preview(cached, action_type)
+            return
+
+        if key in self._preview_inflight:
+            # Speculative processing already running for this action — show
+            # the processing screen and let its completion deliver the preview.
+            debug(f"[voice-notes] Joining speculative processing: {key}")
+            self._pending_preview_body = body
+            self.state = AppState.SAVING
+            self._set_icon(ICON_PROCESSING)
+            overlay.set_saving()
             return
 
         self.state = AppState.SAVING          # reuse the processing screen
