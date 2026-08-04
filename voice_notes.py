@@ -927,6 +927,121 @@ unread: true
 
 
 # ---------------------------------------------------------------------------
+# Control server (Stream Deck / Shortcuts / scripts)
+# ---------------------------------------------------------------------------
+
+class ControlServer:
+    """Tiny loopback-only HTTP API so external controllers (Elgato Stream
+    Deck web-request keys, Apple Shortcuts, scripts) can drive the app.
+
+    Bound to 127.0.0.1 and protected by a shared token (config
+    control_token, auto-generated) because these endpoints can start the
+    microphone. All actions are scheduled onto the app's UI queue.
+
+      GET  /status            → {"state","mode","engine","recording_elapsed"}
+      POST /dictate           → toggle dictation (same as the F1 hotkey)
+      POST /note              → toggle note recording (same as F2)
+      POST /cancel            → cancel recording / paste countdown
+      POST /save              → post-note: Preview · preview: Save to vault
+      POST /action/<key>      → select processing action (clean_format, …)
+
+    Token via "X-Token" header or ?token= query parameter.
+    """
+
+    VALID_ACTIONS = ("clean_format", "action_items", "meeting_summary",
+                     "draft_email", "raw")
+
+    def __init__(self, app, port, token):
+        self.app = app
+        self.port = port
+        self.token = token
+
+    def start(self):
+        import http.server
+        from urllib.parse import urlparse, parse_qs
+
+        server_self = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, fmt, *args):
+                pass   # our own debug() below; keep stderr quiet
+
+            def _reply(self, code, payload):
+                body = json.dumps(payload).encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def _authed(self, parsed):
+                supplied = self.headers.get("X-Token") or \
+                    parse_qs(parsed.query).get("token", [None])[0]
+                return supplied == server_self.token
+
+            def do_GET(self):
+                parsed = urlparse(self.path)
+                if not self._authed(parsed):
+                    return self._reply(401, {"error": "bad token"})
+                if parsed.path == "/status":
+                    return self._reply(200, server_self._status())
+                self._reply(404, {"error": "unknown endpoint"})
+
+            def do_POST(self):
+                parsed = urlparse(self.path)
+                if not self._authed(parsed):
+                    return self._reply(401, {"error": "bad token"})
+                ok = server_self._dispatch(parsed.path)
+                if ok is None:
+                    return self._reply(404, {"error": "unknown endpoint"})
+                self._reply(200, {"ok": True, "state": server_self.app.state.value})
+
+        try:
+            httpd = http.server.ThreadingHTTPServer(("127.0.0.1", self.port), Handler)
+        except OSError as exc:
+            debug(f"[voice-notes] Control server failed to bind :{self.port}: {exc}")
+            return
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        debug(f"[voice-notes] Control server on 127.0.0.1:{self.port}")
+
+    def _status(self):
+        app = self.app
+        elapsed = 0
+        if app.state == AppState.RECORDING and app.recorder.start_time:
+            elapsed = int(time.time() - app.recorder.start_time)
+        return {
+            "state": app.state.value,
+            "mode": getattr(app, "_recording_mode", "note")
+                    if app.state == AppState.RECORDING
+                    else (app.overlay.mode if app.overlay else "note"),
+            "engine": ENGINE,
+            "version": __version__,
+            "recording_elapsed": elapsed,
+        }
+
+    def _dispatch(self, path):
+        app = self.app
+        debug(f"[voice-notes] Control: {path}")
+        if path == "/dictate":
+            app._hotkey_dictation()
+        elif path == "/note":
+            app._hotkey_note()
+        elif path == "/cancel":
+            app._schedule_ui(app.control_cancel)
+        elif path == "/save":
+            app._schedule_ui(app.control_save)
+        elif path.startswith("/action/"):
+            key = path.split("/", 2)[2]
+            if key not in self.VALID_ACTIONS:
+                return None
+            app._schedule_ui(lambda: app.control_action(key))
+        else:
+            return None
+        return True
+
+
+# ---------------------------------------------------------------------------
 # Hotkey listener
 # ---------------------------------------------------------------------------
 
@@ -1664,6 +1779,17 @@ class VoiceNotesApp(rumps.App):
 
         # Start hotkey listener — F1=dictation, F2=note
         start_hotkey_listener(self._hotkey_dictation, self._hotkey_note)
+
+        # Control server for Stream Deck / Shortcuts (loopback + token)
+        control_port = CONFIG.get("control_port", 48752)
+        if control_port:
+            token = CONFIG.get("control_token")
+            if not token:
+                import secrets
+                token = secrets.token_hex(12)
+                CONFIG["control_token"] = token
+                save_config(CONFIG)
+            ControlServer(self, control_port, token).start()
 
         # Poll for UI updates from background threads
         self._poll_timer = rumps.Timer(self._poll_ui_queue, 0.2)
@@ -2608,6 +2734,28 @@ class VoiceNotesApp(rumps.App):
 
     def open_notes(self, _=None):
         subprocess.run(["open", str(NOTES_DIR)])
+
+    # --- Control server actions (scheduled on the UI queue) ---
+
+    def control_cancel(self):
+        if self.state == AppState.RECORDING:
+            self.cancel_recording_from_overlay()
+        elif self.state == AppState.POST_RECORDING and self._paste_timer is not None:
+            self.cancel_paste_from_overlay()
+
+    def control_save(self):
+        overlay = self._ensure_overlay()
+        if self.state == AppState.POST_RECORDING:
+            overlay._eval_js("doProcess()")       # → preview
+        elif self.state == AppState.PREVIEW:
+            overlay._eval_js("doSaveProcessed()") # → vault
+
+    def control_action(self, key):
+        overlay = self._ensure_overlay()
+        if self.state == AppState.POST_RECORDING:
+            overlay._eval_js(f"selectAction('{key}')")
+        elif self.state == AppState.PREVIEW:
+            overlay._eval_js(f"doProcess('{key}')")
 
     def _quit_clicked(self, _=None):
         if self.state == AppState.RECORDING:

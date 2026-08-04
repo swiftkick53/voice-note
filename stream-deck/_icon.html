@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><style>
+@font-face { font-family: 'Gloock'; src: url('../fonts/gloock-latin.woff2') format('woff2'); }
+* { margin:0; padding:0; }
+body { width:144px; height:144px; background:#0d0b0a; display:flex; align-items:center; justify-content:center; overflow:hidden; }
+#blob {
+  width:104px; height:104px; position:relative;
+  border-radius: 42% 58% 55% 45% / 48% 42% 58% 52%;
+  display:flex; align-items:center; justify-content:center;
+}
+#spec { position:absolute; top:14%; left:22%; width:36%; height:20%;
+  background:oklch(1 0 0 / 0.5); filter:blur(7px); border-radius:50%; }
+#glyph { font:400 52px Gloock, serif; color:oklch(0.98 0.01 75); position:relative;
+  text-shadow:0 2px 10px oklch(0 0 0 / 0.45); }
+</style></head><body>
+<div id="blob"><div id="spec"></div><div id="glyph"></div></div>
+<script>
+var p = new URLSearchParams(location.hash.slice(1));
+var h = Number(p.get('hue') || 60);
+var blob = document.getElementById('blob');
+blob.style.background = 'radial-gradient(circle at 32% 28%, oklch(0.9 0.1 ' + (h+5) + '), oklch(0.72 0.15 ' + h + ') 50%, oklch(0.52 0.14 ' + (h-5) + ') 82%, oklch(0.42 0.11 ' + (h-10) + '))';
+blob.style.boxShadow = '0 14px 34px -10px oklch(0.72 0.15 ' + h + '/0.55), inset 0 -10px 20px oklch(0.3 0.08 ' + (h-5) + '/0.5)';
+document.getElementById('glyph').textContent = p.get('glyph') || '';
+</script>
+</body></html>
