@@ -1,0 +1,47 @@
+{
+  "SDKVersion": 2,
+  "Name": "Voice Notes",
+  "Description": "Control Voice Notes: hold-to-talk dictation, note capture, cancel and save — with live blob state on the keys.",
+  "Author": "John Andrews",
+  "Version": "1.0.0",
+  "UUID": "com.johnandrews.voicenotes",
+  "Icon": "icons/plugin",
+  "CodePath": "app.html",
+  "PropertyInspectorPath": "inspector.html",
+  "Category": "Voice Notes",
+  "CategoryIcon": "icons/plugin",
+  "OS": [{ "Platform": "mac", "MinimumVersion": "12" }],
+  "Software": { "MinimumVersion": "6.0" },
+  "Actions": [
+    {
+      "UUID": "com.johnandrews.voicenotes.dictate",
+      "Name": "Dictate",
+      "Tooltip": "Tap to toggle dictation · hold for push-to-talk",
+      "Icon": "icons/dictate",
+      "States": [{ "Image": "icons/dictate", "TitleAlignment": "bottom" }],
+      "SupportedInMultiActions": false
+    },
+    {
+      "UUID": "com.johnandrews.voicenotes.note",
+      "Name": "Note",
+      "Tooltip": "Tap to toggle a note recording · hold for push-to-talk",
+      "Icon": "icons/note",
+      "States": [{ "Image": "icons/note", "TitleAlignment": "bottom" }],
+      "SupportedInMultiActions": false
+    },
+    {
+      "UUID": "com.johnandrews.voicenotes.cancel",
+      "Name": "Cancel",
+      "Tooltip": "Cancel the recording or the paste countdown",
+      "Icon": "icons/cancel",
+      "States": [{ "Image": "icons/cancel" }]
+    },
+    {
+      "UUID": "com.johnandrews.voicenotes.save",
+      "Name": "Preview / Save",
+      "Tooltip": "Note review → Preview · Preview → Save to vault",
+      "Icon": "icons/save",
+      "States": [{ "Image": "icons/save" }]
+    }
+  ]
+}

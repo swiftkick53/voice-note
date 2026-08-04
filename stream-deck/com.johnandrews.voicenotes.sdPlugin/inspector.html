@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { font: 13px -apple-system, sans-serif; background: #2d2d2d; color: #d8d8d8; margin: 0; padding: 12px; }
+  .row { margin-bottom: 10px; }
+  label { display: block; font-size: 11px; color: #969696; margin-bottom: 3px; text-transform: uppercase; letter-spacing: 0.04em; }
+  input { width: 100%; box-sizing: border-box; padding: 6px 8px; border-radius: 5px; border: 1px solid #444; background: #1d1d1d; color: #eee; font: 13px monospace; }
+  button { margin-top: 4px; padding: 7px 16px; border-radius: 5px; border: none; background: #0078d4; color: white; font-weight: 600; cursor: pointer; }
+  .hint { font-size: 11px; color: #808080; margin-top: 10px; line-height: 1.5; }
+  #saved { color: #6c6; font-size: 12px; margin-left: 8px; opacity: 0; transition: opacity 0.3s; }
+  #saved.on { opacity: 1; }
+</style>
+</head>
+<body>
+<div class="row">
+  <label>Control token</label>
+  <input id="token" placeholder="control_token from config.json" autocomplete="off">
+</div>
+<div class="row">
+  <label>Port</label>
+  <input id="port" value="48752">
+</div>
+<button onclick="save()">Save</button><span id="saved">✓ saved</span>
+<div class="hint">
+  Token lives in the Voice Notes config.json (key <b>control_token</b>).
+  Settings are shared by all Voice Notes keys.
+</div>
+<script>
+var ws = null, piUUID = null;
+
+function connectElgatoStreamDeckSocket(inPort, inUUID, inRegisterEvent, inInfo, inActionInfo) {
+  piUUID = inUUID;
+  ws = new WebSocket('ws://127.0.0.1:' + inPort);
+  ws.onopen = function () {
+    ws.send(JSON.stringify({ event: inRegisterEvent, uuid: inUUID }));
+    ws.send(JSON.stringify({ event: 'getGlobalSettings', context: inUUID }));
+  };
+  ws.onmessage = function (msg) {
+    var data = JSON.parse(msg.data);
+    if (data.event === 'didReceiveGlobalSettings') {
+      var s = (data.payload && data.payload.settings) || {};
+      if (s.token) document.getElementById('token').value = s.token;
+      if (s.port) document.getElementById('port').value = s.port;
+    }
+  };
+}
+
+function save() {
+  var payload = {
+    token: document.getElementById('token').value.trim(),
+    port: Number(document.getElementById('port').value) || 48752
+  };
+  ws.send(JSON.stringify({ event: 'setGlobalSettings', context: piUUID, payload: payload }));
+  var el = document.getElementById('saved');
+  el.classList.add('on');
+  setTimeout(function () { el.classList.remove('on'); }, 1500);
+}
+</script>
+</body>
+</html>
