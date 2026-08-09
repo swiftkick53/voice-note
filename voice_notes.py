@@ -355,22 +355,49 @@ class Recorder:
         self.last_level = 0.0
         last_exc = None
 
-        # Try configured device first, then fall back through all input devices.
-        preferred = self._resolve_device(INPUT_DEVICE)
-        candidates = [preferred] if preferred is not None else []
-        # Append all other input devices as fallbacks (skipping already-tried preferred)
-        candidates += [
-            i for i, info in enumerate(sd.query_devices())
-            if int(info.get('max_input_channels', 0)) > 0 and i != preferred
-        ]
+        # Attempt 0: normal. If the CONFIGURED mic fails with PortAudio's
+        # internal error (-9986, a Core Audio wedge), reset PortAudio and
+        # re-resolve for attempt 1 — falling straight through to another
+        # device would silently record from the wrong microphone.
+        for attempt in range(2):
+            preferred = self._resolve_device(INPUT_DEVICE)
+            candidates = [preferred] if preferred is not None else []
+            candidates += [
+                i for i, info in enumerate(sd.query_devices())
+                if int(info.get('max_input_channels', 0)) > 0 and i != preferred
+            ]
 
-        for device in candidates:
-            try:
-                self.stream = self._open_stream(device=device)
-                return
-            except Exception as exc:
-                debug(f"[voice-notes] Device {device} failed: {exc}")
-                last_exc = exc
+            reset_and_retry = False
+            for device in candidates:
+                try:
+                    self.stream = self._open_stream(device=device)
+                    if preferred is not None and device != preferred:
+                        # Never fall back silently — the user must know
+                        # which microphone is actually live.
+                        try:
+                            name = sd.query_devices(device)['name']
+                        except Exception:
+                            name = f"device {device}"
+                        debug(f"[voice-notes] FALLBACK MIC in use: {name}")
+                        notify("Voice Notes", "Using fallback microphone",
+                               f"'{INPUT_DEVICE}' unavailable — recording from {name}.")
+                    return
+                except Exception as exc:
+                    debug(f"[voice-notes] Device {device} failed: {exc}")
+                    last_exc = exc
+                    if (device == preferred and attempt == 0
+                            and "-9986" in str(exc)):
+                        debug("[voice-notes] Configured mic hit -9986 — resetting PortAudio")
+                        try:
+                            sd._terminate()
+                            time.sleep(0.5)
+                            sd._initialize()
+                        except Exception as reset_exc:
+                            debug(f"[voice-notes] PortAudio reset failed: {reset_exc}")
+                        reset_and_retry = True
+                        break   # device indices may have changed — re-resolve
+            if not reset_and_retry:
+                break
 
         self.recording = False
         raise RuntimeError(
